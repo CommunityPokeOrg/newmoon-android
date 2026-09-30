@@ -1,0 +1,349 @@
+diff --git a/build/autoconf/config.sub b/build/autoconf/config.sub
+index 74c87648f9..9e64d5137c 100755
+--- a/build/autoconf/config.sub
++++ b/build/autoconf/config.sub
+@@ -115,6 +115,7 @@ esac
+ maybe_os=`echo $1 | sed 's/^\(.*\)-\([^-]*-[^-]*\)$/\2/'`
+ case $maybe_os in
+   nto-qnx* | linux-gnu* | linux-dietlibc | linux-newlib* | \
++  linux-android* | linux-androideabi* | \
+   linux-musl* | linux-uclibc* | uclinux-uclibc* | uclinux-gnu* | kfreebsd*-gnu* | \
+   knetbsd*-gnu* | netbsd*-gnu* | netbsd*-eabi* | \
+   kopensolaris*-gnu* | \
+@@ -1386,6 +1387,7 @@ case $os in
+ 	      | -chorusos* | -chorusrdb* | -cegcc* \
+ 	      | -cygwin* | -msys* | -pe* | -psos* | -moss* | -proelf* | -rtems* \
+ 	      | -mingw32* | -mingw64* | -linux-gnu* \
++		      | -linux-android* | -linux-androideabi* \
+ 	      | -linux-newlib* | -linux-musl* | -linux-uclibc* \
+ 	      | -uxpv* | -beos* | -mpeix* | -udk* | -moxiebox* \
+ 	      | -interix* | -uwin* | -mks* | -rhapsody* | -darwin* | -opened* \
+diff --git a/build/moz.build b/build/moz.build
+index 1f1c7474cd..afdb61eaba 100644
+--- a/build/moz.build
++++ b/build/moz.build
+@@ -11,6 +11,9 @@ if CONFIG['OS_ARCH'] == 'WINNT':
+ else:
+     DIRS += ['unix']
+ 
++if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    DIRS += ['annotationProcessors']
++
+ for var in ('GRE_MILESTONE',
+             'MOZ_APP_VERSION',
+             'MOZ_APP_BASENAME',
+diff --git a/build/moz.configure/android-ndk.configure b/build/moz.configure/android-ndk.configure
+new file mode 100644
+index 0000000000..83d96d3353
+--- /dev/null
++++ b/build/moz.configure/android-ndk.configure
+@@ -0,0 +1,170 @@
++# -*- Mode: python; indent-tabs-mode: nil; tab-width: 40 -*-
++# vim: set filetype=python:
++# This Source Code Form is subject to the terms of the Mozilla Public
++# License, v. 2.0. If a copy of the MPL was not distributed with this
++# file, You can obtain one at http://mozilla.org/MPL/2.0/.
++
++
++js_option('--with-android-ndk', nargs=1,
++          help='location where the Android NDK can be found')
++
++js_option('--with-android-toolchain', nargs=1,
++          help='location of the Android toolchain')
++
++js_option('--with-android-gnu-compiler-version', nargs=1,
++          help='GNU compiler version to use')
++
++min_android_version = dependable(lambda: '9')
++
++js_option('--with-android-version',
++          nargs=1,
++          help='android platform version',
++          default=min_android_version)
++
++@depends('--with-android-version', min_android_version)
++@imports(_from='__builtin__', _import='ValueError')
++def android_version(value, min_version):
++    if not value:
++        # Someone has passed --without-android-version.
++        die('--with-android-version cannot be disabled.')
++
++    try:
++        version = int(value[0])
++    except ValueError:
++        die('--with-android-version expects an integer value')
++
++    if version < int(min_version):
++        die('--with-android-version must be at least %s (got %s)',
++            min_version, value[0])
++
++    return version
++
++add_old_configure_assignment('android_version', android_version)
++
++@depends('--with-android-ndk', build_project)
++def ndk(value, build_project):
++    if build_project == 'mobile/android' and not value:
++        die('You must specify --with-android-ndk=/path/to/ndk when '
++            'building mobile/android')
++    if value:
++        return value[0]
++
++set_config('ANDROID_NDK', ndk)
++add_old_configure_assignment('android_ndk', ndk)
++
++@depends(target, host, android_version, ndk)
++@checking('for android platform directory')
++@imports(_from='os.path', _import='isdir')
++def android_platform(target, host, android_version, ndk):
++    if target.os != 'Android':
++        return
++
++    # Modern NDK (r19+): unified LLVM toolchain with a single sysroot.
++    sysroot = os.path.join(ndk, 'toolchains', 'llvm', 'prebuilt',
++                           '%s-%s' % (host.kernel.lower(), host.cpu),
++                           'sysroot')
++    if isdir(sysroot):
++        return sysroot
++
++    if 'mips' in target.cpu:
++        target_dir_name = 'mips'
++    elif 'aarch64' == target.cpu:
++        target_dir_name = 'arm64'
++    else:
++        target_dir_name = target.cpu
++
++    # Not all Android releases have their own platform release. We use
++    # the next lower platform version in these cases.
++    if android_version in (11, 10):
++        platform_version = 9
++    elif android_version in (20, 22):
++        platform_version = android_version - 1
++    else:
++        platform_version = android_version
++
++    platform_dir = os.path.join(ndk,
++                                'platforms',
++                                'android-%s' % platform_version,
++                                'arch-%s' % target_dir_name)
++
++    if not isdir(platform_dir):
++        die("Android platform directory not found. With the current "
++            "configuration, it should be in %s" % platform_dir)
++
++    return platform_dir
++
++add_old_configure_assignment('android_platform', android_platform)
++
++@depends(android_platform)
++def extra_toolchain_flags(platform_dir):
++    if not platform_dir:
++        return []
++    return ['-idirafter',
++            os.path.join(platform_dir, 'usr', 'include')]
++
++@depends(target, host, ndk, '--with-android-toolchain',
++         '--with-android-gnu-compiler-version')
++@checking('for the Android toolchain directory', lambda x: x or 'not found')
++@imports(_from='os.path', _import='isdir')
++@imports(_from='mozbuild.shellutil', _import='quote')
++def android_toolchain(target, host, ndk, toolchain, gnu_compiler_version):
++    if not ndk:
++        return
++    if toolchain:
++        return toolchain[0]
++
++    # Modern NDK (r19+): unified LLVM toolchain.
++    unified = os.path.join(ndk, 'toolchains', 'llvm', 'prebuilt',
++                           '%s-%s' % (host.kernel.lower(), host.cpu))
++    if isdir(os.path.join(unified, 'bin')):
++        return unified
++
++    if target.cpu == 'arm' and target.endianness == 'little':
++        target_base = 'arm-linux-androideabi'
++    elif target.cpu == 'x86':
++        target_base = 'x86'
++    elif target.cpu == 'mips32' and target.endianness == 'little':
++        target_base = 'mipsel-linux-android'
++    elif target.cpu == 'aarch64' and target.endianness == 'little':
++        target_base = 'aarch64-linux-android'
++    else:
++        die('Target cpu is not supported.')
++
++    toolchain_format = '%s/toolchains/%s-%s/prebuilt/%s-%s'
++
++    for version in gnu_compiler_version or ['4.9', '4.8', '4.7']:
++        toolchain = toolchain_format % (ndk, target_base, version,
++                                        host.kernel.lower(), host.cpu)
++        log.debug('Trying %s' % quote(toolchain))
++        if not isdir(toolchain) and host.cpu == 'x86_64':
++            toolchain = toolchain_format % (ndk, target_base, version,
++                                            host.kernel.lower(), 'x86')
++            log.debug('Trying %s' % quote(toolchain))
++        if isdir(toolchain):
++            return toolchain
++    else:
++        if gnu_compiler_version:
++            die('Your --with-android-gnu-compiler-version may be wrong')
++        die('You have to specify --with-android-toolchain='
++            '/path/to/ndk/toolchain.')
++
++set_config('ANDROID_TOOLCHAIN', android_toolchain)
++
++@depends(target, android_toolchain)
++@imports(_from='os.path', _import='isfile')
++@imports('os')
++def android_toolchain_prefix(target, toolchain):
++    if toolchain:
++        # Unified LLVM NDK: compilers are <triple><api>-clang[++] and
++        # binutils are llvm-*; no single tool prefix exists, so the
++        # toolchain prefix is left to explicit configuration.
++        if isfile(os.path.join(toolchain, 'bin', 'llvm-ar')):
++            return
++        if target.cpu == 'x86':
++            # Ideally, the --target should just have the right x86 variant
++            # in the first place.
++            return '%s/bin/i686-linux-android-' % toolchain
++        return '%s/bin/%s-' % (toolchain, target.toolchain)
++
++imply_option('--with-toolchain-prefix', android_toolchain_prefix,
++             reason='--with-android-ndk')
+diff --git a/build/moz.configure/init.configure b/build/moz.configure/init.configure
+index 72dec1d3ee..9d4303592a 100644
+--- a/build/moz.configure/init.configure
++++ b/build/moz.configure/init.configure
+@@ -313,7 +313,10 @@ def split_triplet(triplet):
+     # mix of uname and config.guess output, while we now only use the latter,
+     # which presumably has a cleaner and leaner output. Let's refine later.
+     os = os.replace('/', '_')
+-    if os.startswith('linux'):
++    if 'android' in os:
++        canonical_os = 'Android'
++        canonical_kernel = 'Linux'
++    elif os.startswith('linux'):
+         canonical_os = 'GNU'
+         canonical_kernel = 'Linux'
+     elif os.startswith('kfreebsd') and os.endswith('-gnu'):
+diff --git a/build/moz.configure/toolchain.configure b/build/moz.configure/toolchain.configure
+index 810bde4c87..30d935f6be 100644
+--- a/build/moz.configure/toolchain.configure
++++ b/build/moz.configure/toolchain.configure
+@@ -99,6 +99,15 @@ def nasm_asflags(have_nasm, target):
+ 
+ set_config('NASM_ASFLAGS', nasm_asflags)
+ 
++# Android NDK
++# ==============================================================
++
++@depends('--disable-compile-environment', build_project, '--help')
++def compiling_android(compile_env, build_project, _):
++    return compile_env and build_project in ('mobile/android', 'js')
++
++include('android-ndk.configure', when=compiling_android)
++
+ # MacOS deployment target version
+ # ==============================================================
+ # This needs to happen before any compilation test is done.
+diff --git a/dom/system/moz.build b/dom/system/moz.build
+index b00fca71da..4839632f27 100644
+--- a/dom/system/moz.build
++++ b/dom/system/moz.build
+@@ -9,6 +9,8 @@ if toolkit == 'windows':
+     DIRS += ['windows']
+ elif toolkit == 'cocoa' and [int(x) for x in CONFIG['MACOSX_DEPLOYMENT_TARGET'].split('.')] >= [10, 6]:
+     DIRS += ['mac']
++elif toolkit == 'android':
++    DIRS += ['android']
+ elif toolkit in ('gtk2', 'gtk3'):
+     DIRS += ['linux']
+ 
+diff --git a/hal/moz.build b/hal/moz.build
+index 9943a090d2..194a8fd93e 100644
+--- a/hal/moz.build
++++ b/hal/moz.build
+@@ -24,7 +24,21 @@ SOURCES += [
+     'Hal.cpp',
+ ]
+ 
+-if CONFIG['OS_TARGET'] == 'Linux':
++if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    LOCAL_INCLUDES += [
++        '/widget/android',
++    ]
++    UNIFIED_SOURCES += [
++        'android/AndroidAlarm.cpp',
++        'android/AndroidSensor.cpp',
++        'fallback/FallbackPower.cpp',
++        'linux/LinuxMemory.cpp',
++    ]
++    # AndroidHal.cpp cannot be built in unified mode because it relies on HalImpl.h.
++    SOURCES += [
++        'android/AndroidHal.cpp',
++    ]
++elif CONFIG['OS_TARGET'] == 'Linux':
+     UNIFIED_SOURCES += [
+         'fallback/FallbackAlarm.cpp',
+         'fallback/FallbackScreenConfiguration.cpp',
+diff --git a/mozglue/moz.build b/mozglue/moz.build
+index eec0829bfa..f7509415e0 100644
+--- a/mozglue/moz.build
++++ b/mozglue/moz.build
+@@ -6,6 +6,9 @@
+ if CONFIG['MOZ_LINKER']:
+     DIRS += ['linker']
+ 
++if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    DIRS += ['android']
++
+ DIRS += [
+   'build',
+   'misc',
+diff --git a/toolkit/moz.configure b/toolkit/moz.configure
+index 5993671e42..8dd507dcbb 100644
+--- a/toolkit/moz.configure
++++ b/toolkit/moz.configure
+@@ -48,7 +48,7 @@ set_config('L10NBASEDIR', l10n_base)
+ # reason.
+ option('--enable-default-toolkit', nargs=1,
+        choices=('cairo-windows', 'cairo-gtk2', 'cairo-gtk2-x11', 'cairo-gtk3',
+-                'cairo-cocoa', 'cairo-uikit'),
++                'cairo-cocoa', 'cairo-uikit', 'cairo-android'),
+        help='Select default toolkit')
+ 
+ @depends('--enable-default-toolkit', target, '--help')
+@@ -62,6 +62,8 @@ def toolkit(value, target, _):
+         platform_choices = ('cairo-cocoa',)
+     elif target.os == 'iOS':
+         platform_choices = ('cairo-uikit',)
++    elif target.os == 'Android':
++        platform_choices = ('cairo-android',)
+     else:
+         platform_choices = ('cairo-gtk3', 'cairo-gtk2', 'cairo-gtk2-x11')
+ 
+diff --git a/widget/moz.build b/widget/moz.build
+index 6b49e35270..f3d4fa3df8 100644
+--- a/widget/moz.build
++++ b/widget/moz.build
+@@ -5,10 +5,10 @@
+ 
+ toolkit = CONFIG['MOZ_WIDGET_TOOLKIT']
+ 
+-if toolkit in ('cocoa', 'uikit'):
++if toolkit in ('cocoa', 'uikit', 'android'):
+     DIRS += [toolkit]
+ 
+-if toolkit in ('gtk2', 'gtk3'):
++if toolkit in ('android', 'gtk2', 'gtk3'):
+     EXPORTS += ['nsIPrintDialogService.h']
+ 
+ if toolkit == 'windows':
+@@ -229,7 +229,8 @@ if toolkit in ('cocoa', 'windows'):
+         'nsBaseClipboard.cpp',
+     ]
+ 
+-if toolkit in {'gtk2', 'gtk3', 'cocoa', 'windows'}:
++if toolkit in {'gtk2', 'gtk3', 'cocoa', 'windows',
++               'android', 'uikit'}:
+     UNIFIED_SOURCES += [
+         'nsBaseFilePicker.cpp',
+         'nsNativeTheme.cpp',

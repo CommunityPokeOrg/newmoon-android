@@ -1,0 +1,186 @@
+diff --git a/nsprpub/configure b/nsprpub/configure
+index 6343ec7f87..1b48a41be0 100755
+--- a/nsprpub/configure
++++ b/nsprpub/configure
+@@ -2623,6 +2623,9 @@ arm)
+ i?86|mipsel)
+     android_version=9
+     ;;
++aarch64|x86_64)
++    android_version=21
++    ;;
+ esac
+ 
+ 
+@@ -2640,13 +2643,13 @@ fi
+ 
+ 
+ case "$target" in
+-x86_64-linux*-android*)
++x86_64-*linux*-android*|x86_64-*android*)
+     android_tool_prefix="x86_64-linux-android"
+     ;;
+-aarch64-linux*-android*)
++aarch64-*linux*-android*|aarch64-*android*)
+     android_tool_prefix="aarch64-linux-android"
+     ;;
+-arm-linux*-android*|*-linuxandroid*)
++arm-*linux*-android*|arm-*android*|*-linuxandroid*)
+     android_tool_prefix="arm-linux-androideabi"
+     ;;
+ i?86-*android*)
+@@ -2719,6 +2722,33 @@ $as_echo "$android_platform" >&6; }
+         fi
+     fi
+ 
++    # Modern NDK (r19+): unified LLVM toolchain layout. The clang driver
++    # wrappers are named <triple><api>-clang; target-* binutils are llvm-*.
++    # 32-bit ARM uses armv7a-linux-androideabi for the compiler triple.
++    case "$android_tool_prefix" in
++    arm-linux-androideabi)
++        clang_tool_prefix="armv7a-linux-androideabi"
++        ;;
++    *)
++        clang_tool_prefix="$android_tool_prefix"
++        ;;
++    esac
++
++    if test -x "$android_toolchain"/bin/"$clang_tool_prefix$android_version"-clang; then
++        AS="$android_toolchain"/bin/"$clang_tool_prefix$android_version"-clang
++        CC="$android_toolchain"/bin/"$clang_tool_prefix$android_version"-clang
++        CXX="$android_toolchain"/bin/"$clang_tool_prefix$android_version"-clang++
++        CPP="$android_toolchain"/bin/"$clang_tool_prefix$android_version"-clang" -E"
++        LD="$android_toolchain"/bin/ld.lld
++        AR="$android_toolchain"/bin/llvm-ar
++        RANLIB="$android_toolchain"/bin/llvm-ranlib
++        STRIP="$android_toolchain"/bin/llvm-strip
++
++        CPPFLAGS="--sysroot=$android_platform -I$android_platform/usr/include $CPPFLAGS"
++        CFLAGS="-fno-short-enums -fno-exceptions $CFLAGS"
++        CXXFLAGS="-fpic -fno-short-enums -fno-exceptions $CXXFLAGS"
++        LDFLAGS="--sysroot=$android_platform -Wl,-rpath-link=$android_platform/usr/lib $LDFLAGS"
++    else
+             case "$target_cpu" in
+     i?86)
+         if ! test -e "$android_toolchain"/bin/"$android_tool_prefix"-gcc; then
+@@ -2740,6 +2770,7 @@ $as_echo "$android_platform" >&6; }
+     CFLAGS="-mandroid -I$android_platform/usr/include -fno-short-enums -fno-exceptions $CFLAGS"
+     CXXFLAGS="-mandroid -I$android_platform/usr/include -fpic -fno-short-enums -fno-exceptions $CXXFLAGS"
+     LDFLAGS="-mandroid -L$android_platform/usr/lib -Wl,-rpath-link=$android_platform/usr/lib --sysroot=$android_platform $LDFLAGS"
++    fi
+ 
+     $as_echo "#define ANDROID 1" >>confdefs.h
+ 
+diff --git a/nsprpub/configure.in b/nsprpub/configure.in
+index 7d4446689a..3f5aad506c 100644
+--- a/nsprpub/configure.in
++++ b/nsprpub/configure.in
+@@ -120,6 +120,9 @@ arm)
+ i?86|mipsel)
+     android_version=9
+     ;;
++aarch64|x86_64)
++    android_version=21
++    ;;
+ esac
+ 
+ AC_ARG_WITH(android-version,
+@@ -133,13 +136,13 @@ AC_ARG_WITH(android-platform,
+     android_platform=$withval)
+ 
+ case "$target" in
+-x86_64-linux*-android*)
++x86_64-*linux*-android*|x86_64-*android*)
+     android_tool_prefix="x86_64-linux-android"
+     ;;
+-aarch64-linux*-android*)
++aarch64-*linux*-android*|aarch64-*android*)
+     android_tool_prefix="aarch64-linux-android"
+     ;;
+-arm-linux*-android*|*-linuxandroid*)
++arm-*linux*-android*|arm-*android*|*-linuxandroid*)
+     android_tool_prefix="arm-linux-androideabi"
+     ;;
+ i?86-*android*)
+@@ -208,31 +211,59 @@ case "$target" in
+         fi
+     fi
+ 
+-    dnl Old NDK support. If minimum requirement is changed to NDK r8b,
+-    dnl please remove this.
+-    case "$target_cpu" in
+-    i?86)
+-        if ! test -e "$android_toolchain"/bin/"$android_tool_prefix"-gcc; then
+-            dnl Old NDK toolchain name
+-            android_tool_prefix="i686-android-linux"
+-        fi
++    dnl Modern NDK (r19+): unified LLVM toolchain layout. The clang driver
++    dnl wrappers are named <triple><api>-clang; target-* binutils are llvm-*.
++    dnl 32-bit ARM uses armv7a-linux-androideabi for the compiler triple.
++    case "$android_tool_prefix" in
++    arm-linux-androideabi)
++        clang_tool_prefix="armv7a-linux-androideabi"
++        ;;
++    *)
++        clang_tool_prefix="$android_tool_prefix"
+         ;;
+     esac
+ 
+-    dnl set up compilers
+-    AS="$android_toolchain"/bin/"$android_tool_prefix"-as
+-    CC="$android_toolchain"/bin/"$android_tool_prefix"-gcc
+-    CXX="$android_toolchain"/bin/"$android_tool_prefix"-g++
+-    CPP="$android_toolchain"/bin/"$android_tool_prefix"-cpp
+-    LD="$android_toolchain"/bin/"$android_tool_prefix"-ld
+-    AR="$android_toolchain"/bin/"$android_tool_prefix"-ar
+-    RANLIB="$android_toolchain"/bin/"$android_tool_prefix"-ranlib
+-    STRIP="$android_toolchain"/bin/"$android_tool_prefix"-strip
+-
+-    CPPFLAGS="-I$android_platform/usr/include $CPPFLAGS"
+-    CFLAGS="-mandroid -I$android_platform/usr/include -fno-short-enums -fno-exceptions $CFLAGS"
+-    CXXFLAGS="-mandroid -I$android_platform/usr/include -fpic -fno-short-enums -fno-exceptions $CXXFLAGS"
+-    LDFLAGS="-mandroid -L$android_platform/usr/lib -Wl,-rpath-link=$android_platform/usr/lib --sysroot=$android_platform $LDFLAGS"
++    if test -x "$android_toolchain"/bin/"$clang_tool_prefix$android_version"-clang; then
++        AS="$android_toolchain"/bin/"$clang_tool_prefix$android_version"-clang
++        CC="$android_toolchain"/bin/"$clang_tool_prefix$android_version"-clang
++        CXX="$android_toolchain"/bin/"$clang_tool_prefix$android_version"-clang++
++        CPP="$android_toolchain"/bin/"$clang_tool_prefix$android_version"-clang" -E"
++        LD="$android_toolchain"/bin/ld.lld
++        AR="$android_toolchain"/bin/llvm-ar
++        RANLIB="$android_toolchain"/bin/llvm-ranlib
++        STRIP="$android_toolchain"/bin/llvm-strip
++
++        CPPFLAGS="--sysroot=$android_platform -I$android_platform/usr/include $CPPFLAGS"
++        CFLAGS="-fno-short-enums -fno-exceptions $CFLAGS"
++        CXXFLAGS="-fpic -fno-short-enums -fno-exceptions $CXXFLAGS"
++        LDFLAGS="--sysroot=$android_platform -Wl,-rpath-link=$android_platform/usr/lib $LDFLAGS"
++    else
++        dnl Old NDK support. If minimum requirement is changed to NDK r8b,
++        dnl please remove this.
++        case "$target_cpu" in
++        i?86)
++            if ! test -e "$android_toolchain"/bin/"$android_tool_prefix"-gcc; then
++                dnl Old NDK toolchain name
++                android_tool_prefix="i686-android-linux"
++            fi
++            ;;
++        esac
++
++        dnl set up compilers
++        AS="$android_toolchain"/bin/"$android_tool_prefix"-as
++        CC="$android_toolchain"/bin/"$android_tool_prefix"-gcc
++        CXX="$android_toolchain"/bin/"$android_tool_prefix"-g++
++        CPP="$android_toolchain"/bin/"$android_tool_prefix"-cpp
++        LD="$android_toolchain"/bin/"$android_tool_prefix"-ld
++        AR="$android_toolchain"/bin/"$android_tool_prefix"-ar
++        RANLIB="$android_toolchain"/bin/"$android_tool_prefix"-ranlib
++        STRIP="$android_toolchain"/bin/"$android_tool_prefix"-strip
++
++        CPPFLAGS="-I$android_platform/usr/include $CPPFLAGS"
++        CFLAGS="-mandroid -I$android_platform/usr/include -fno-short-enums -fno-exceptions $CFLAGS"
++        CXXFLAGS="-mandroid -I$android_platform/usr/include -fpic -fno-short-enums -fno-exceptions $CXXFLAGS"
++        LDFLAGS="-mandroid -L$android_platform/usr/lib -Wl,-rpath-link=$android_platform/usr/lib --sysroot=$android_platform $LDFLAGS"
++    fi
+ 
+     AC_DEFINE(ANDROID)
+     ;;

@@ -1,0 +1,6 @@
+upstream/
+out/
+*.o
+*.so
+*.a
+obj-*/
