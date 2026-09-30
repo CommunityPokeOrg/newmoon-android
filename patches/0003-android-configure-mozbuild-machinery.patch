@@ -1,0 +1,675 @@
+diff --git a/aclocal.m4 b/aclocal.m4
+index f14ddbf29c..32c967d648 100644
+--- a/aclocal.m4
++++ b/aclocal.m4
+@@ -21,6 +21,7 @@ builtin(include, build/autoconf/frameptr.m4)dnl
+ builtin(include, build/autoconf/compiler-opts.m4)dnl
+ builtin(include, build/autoconf/expandlibs.m4)dnl
+ builtin(include, build/autoconf/arch.m4)dnl
++builtin(include, build/autoconf/android.m4)dnl
+ builtin(include, build/autoconf/zlib.m4)dnl
+ builtin(include, build/autoconf/icu.m4)dnl
+ builtin(include, build/autoconf/clang-plugin.m4)dnl
+diff --git a/build/autoconf/icu.m4 b/build/autoconf/icu.m4
+index b807e9e955..a822470a37 100644
+--- a/build/autoconf/icu.m4
++++ b/build/autoconf/icu.m4
+@@ -50,7 +50,9 @@ AC_SUBST(MOZ_ICU_DATA_ARCHIVE)
+ AC_SUBST(MOZ_SHARED_ICU)
+ 
+ if test -n "$USE_ICU"; then
+-    if test -z "$YASM" -a -z "$GNU_AS" -a "$COMPILE_ENVIRONMENT"; then
++    dnl clang's integrated assembler is GNU-compatible, and ICU's asm
++    dnl sources only exist on x86 anyway.
++    if test -z "$YASM" -a -z "$GNU_AS" -a -z "$CLANG_CC" -a "$COMPILE_ENVIRONMENT"; then
+       AC_MSG_ERROR([Building ICU requires either yasm or a GNU assembler. If you do not have either of those available for this platform you must use --without-intl-api])
+     fi
+     if test -z "$MOZ_SHARED_ICU"; then
+diff --git a/build/moz.configure/checks.configure b/build/moz.configure/checks.configure
+index d80c11e0f8..c406460e43 100644
+--- a/build/moz.configure/checks.configure
++++ b/build/moz.configure/checks.configure
+@@ -51,7 +51,7 @@ def checking(what, callback=None):
+                 try:
+                     ret = func(*args, **kwargs)
+                 except FatalCheckError as e:
+-                    error = e.message
++                    error = str(e)
+                 display_ret = callback(ret) if callback else ret
+                 if display_ret is True:
+                     log.info('yes')
+diff --git a/build/moz.configure/java.configure b/build/moz.configure/java.configure
+index 4ef4254e12..2ab83a71b7 100644
+--- a/build/moz.configure/java.configure
++++ b/build/moz.configure/java.configure
+@@ -40,7 +40,9 @@ def check_java_tool(tool):
+     return require_tool
+ 
+ check_java_tool('java')
+-check_java_tool('javah')
++# javah was removed from the JDK (JDK 10+); javac -h replaced it.
++javah = check_prog('JAVAH', ('javah',), paths=java_search_paths,
++                   allow_missing=True)
+ check_java_tool('jar')
+ check_java_tool('jarsigner')
+ check_java_tool('keytool')
+@@ -52,7 +54,8 @@ javac = check_java_tool('javac')
+ def javac_version(javac):
+     try:
+         output = subprocess.check_output([javac, '-version'],
+-                                         stderr=subprocess.STDOUT).rstrip()
++                                         stderr=subprocess.STDOUT,
++                                         universal_newlines=True).rstrip()
+         version = Version(output.split(' ')[-1])
+         if version < '1.7':
+             die('javac 1.7 or higher is required (found %s)' % version)
+diff --git a/build/moz.configure/old.configure b/build/moz.configure/old.configure
+index bfa098fbbc..87f7910dff 100644
+--- a/build/moz.configure/old.configure
++++ b/build/moz.configure/old.configure
+@@ -278,6 +278,13 @@ def old_configure_options(*options):
+     
+     # Below are configure flags used by Basilisk
+     '--disable-webextensions',
++
++    # Android port options (restored for the Pale Moon for Android revival).
++    '--with-android-cxx-stl',
++    '--with-android-distribution-directory',
++    '--with-android-sdk',
++    '--with-android-min-sdk',
++    '--with-android-max-sdk',
+ )
+ @imports(_from='__builtin__', _import='compile')
+ @imports(_from='__builtin__', _import='open')
+diff --git a/config/external/moz.build b/config/external/moz.build
+index e5a4948cd3..9a1f1d4ca2 100644
+--- a/config/external/moz.build
++++ b/config/external/moz.build
+@@ -59,7 +59,7 @@ external_dirs += [
+     'media/psshparser'
+ ]
+ 
+-if CONFIG['MOZ_UPDATER']:
++if CONFIG['MOZ_UPDATER'] or CONFIG['MOZ_LINKER']:
+     external_dirs += ['modules/xz-embedded']
+ 
+ DIRS += ['../../' + i for i in external_dirs]
+diff --git a/dom/base/moz.build b/dom/base/moz.build
+index 76eb5263da..c9d067c83d 100755
+--- a/dom/base/moz.build
++++ b/dom/base/moz.build
+@@ -412,12 +412,17 @@ EXTRA_COMPONENTS += [
+     'contentAreaDropListener.manifest',
+     'messageWakeupService.js',
+     'messageWakeupService.manifest',
+-    'SiteSpecificUserAgent.js',
+-    'SiteSpecificUserAgent.manifest',
+     'SlowScriptDebug.js',
+     'SlowScriptDebug.manifest',
+ ]
+ 
++# Android provides an alternate version of this component
++if CONFIG['MOZ_BUILD_APP'] != 'mobile/android':
++    EXTRA_COMPONENTS += [
++        'SiteSpecificUserAgent.js',
++        'SiteSpecificUserAgent.manifest',
++    ]
++
+ EXTRA_JS_MODULES += [
+     'DOMRequestHelper.jsm',
+     'IndexedDBHelper.jsm',
+diff --git a/old-configure.in b/old-configure.in
+index 0652d4e141..4191d131c7 100644
+--- a/old-configure.in
++++ b/old-configure.in
+@@ -88,12 +88,22 @@ DIST="$MOZ_BUILD_ROOT/dist"
+ 
+ MOZ_DEFAULT_COMPILER
+ 
++if test "$COMPILE_ENVIRONMENT"; then
++    MOZ_ANDROID_NDK
++fi # COMPILE_ENVIRONMENT
++
+ case "$target" in
++*-android*|*-linuxandroid*)
++    ZLIB_DIR=yes
++    AC_DEFINE(ANDROID)
++    ;;
+ *-linux*)
+     AC_PATH_PROG(OBJCOPY,objcopy)
+     ;;
+ esac
+ 
++AC_SUBST(ANDROID_SOURCE)
++AC_SUBST(ANDROID_PACKAGE_NAME)
+ AC_SUBST(OBJCOPY)
+ 
+ dnl ========================================================
+@@ -474,6 +484,21 @@ dnl Configure platform-specific CPU architecture compiler options.
+ dnl ==============================================================
+ if test "$COMPILE_ENVIRONMENT"; then
+     MOZ_ARCH_OPTS
++else
++    if test "$OS_TARGET" = "Android"; then
++        dnl Default Android builds to ARMv7.
++        MOZ_ARCH=armv7-a
++    fi
++fi # COMPILE_ENVIRONMENT
++
++dnl ========================================================
++dnl Android C++ STL selection, placed here so it can use MOZ_ARCH
++dnl computed above.
++dnl ========================================================
++
++MOZ_ANDROID_CPU_ARCH
++if test "$COMPILE_ENVIRONMENT"; then
++    MOZ_ANDROID_STLPORT
+ fi # COMPILE_ENVIRONMENT
+ 
+ dnl ========================================================
+@@ -704,7 +729,7 @@ case "$host" in
+     HOST_OPTIMIZE_FLAGS="${HOST_OPTIMIZE_FLAGS=-O3}"
+     ;;
+ 
+-*-linux*|*-kfreebsd*-gnu|*-gnu*)
++*-linux*|*-kfreebsd*-gnu|*-gnu*|*-android*|*-linuxandroid*)
+     HOST_CFLAGS="$HOST_CFLAGS -DXP_UNIX"
+     HOST_OPTIMIZE_FLAGS="${HOST_OPTIMIZE_FLAGS=-O3}"
+     ;;
+@@ -816,6 +841,19 @@ case "$target" in
+     MOZ_FIX_LINK_PATHS="-Wl,-executable_path,${DIST}/bin"
+     ;;
+ 
++*-android*|*-linuxandroid*)
++    AC_DEFINE(NO_PW_GECOS)
++    if test "$COMPILE_ENVIRONMENT"; then
++        MOZ_LINKER=1
++    fi
++
++    MOZ_GFX_OPTIMIZE_MOBILE=1
++    MOZ_OPTIMIZE_FLAGS="-O2"
++    if test -z "$CLANG_CC"; then
++       MOZ_OPTIMIZE_FLAGS="-freorder-blocks -fno-reorder-functions $MOZ_OPTIMIZE_FLAGS"
++    fi
++    ;;
++
+ *-*linux*)
+     if test "$GNU_CC" -o "$GNU_CXX"; then
+         MOZ_PGO_OPTIMIZE_FLAGS="-O3"
+@@ -1805,6 +1843,9 @@ if test "$ac_cv_thread_keyword" = yes -a "$MOZ_LINKER" != 1; then
+     mips*-*)
+       :
+       ;;
++    *-android*|*-linuxandroid*)
++      :
++      ;;
+     *-openbsd*)
+       :
+       ;;
+@@ -1832,6 +1873,38 @@ dnl gnu style tables anyways.
+   LDFLAGS="$LDFLAGS -Wl,--hash-style=sysv"
+ fi
+ 
++dnl The custom linker doesn't support text relocations, but NDK >= r6b
++dnl creates some (http://code.google.com/p/android/issues/detail?id=23203)
++dnl We however want to avoid these text relocations, and this can be done
++dnl by making gcc not link crtbegin and crtend. In the broken NDKs, crtend
++dnl doesn't contain anything at all, beside placeholders for some sections,
++dnl and crtbegin only contains a finalizer function that calls
++dnl __cxa_finalize. The custom linker actually takes care of calling
++dnl __cxa_finalize when the library doesn't call it itself, which makes it
++dnl safe not to link crtbegin. Besides, previous versions of the NDK didn't
++dnl link crtbegin and crtend at all.
++if test -n "$MOZ_LINKER" -a "$OS_TARGET" = "Android"; then
++  AC_CACHE_CHECK([whether the CRT objects have text relocations],
++    ac_cv_crt_has_text_relocations,
++    [echo 'int foo() { return 0; }' > conftest.cpp
++     if AC_TRY_COMMAND(${CXX-g++} -o conftest${DLL_SUFFIX} $CXXFLAGS $DSO_LDOPTS $LDFLAGS conftest.cpp $LIBS 1>&5) &&
++        test -s conftest${DLL_SUFFIX}; then
++       if $TOOLCHAIN_PREFIX${OBJDUMP-objdump} -R conftest${DLL_SUFFIX} | grep -c TextRel; then
++         ac_cv_crt_has_text_relocations=yes
++       else
++         ac_cv_crt_has_text_relocations=no
++       fi
++     else
++       AC_MSG_ERROR([Couldn't compile a simple C file])
++     fi])
++  if test "$ac_cv_crt_has_text_relocations" = yes; then
++    DSO_LDOPTS="$DSO_LDOPTS -nostartfiles"
++    NOSTDLIB=1
++    AC_SUBST(NOSTDLIB)
++    AC_MSG_WARN([Your toolchain creates text relocations; libxul will fail to load on old Android versions])
++  fi
++fi
++
+ dnl See if compiler supports some gcc-style attributes
+ 
+ AC_CACHE_CHECK(for __attribute__((always_inline)),
+@@ -2135,6 +2208,41 @@ if test -z "$XULRUNNER_STUB_NAME"; then
+ fi
+ AC_SUBST(XULRUNNER_STUB_NAME)
+ 
++case "${target}" in
++    *-android*|*-linuxandroid*)
++        MOZ_THEME_FASTSTRIPE=1
++        MOZ_RAW=1
++        ;;
++
++esac
++
++dnl Optional Pale Moon for Android partner distribution directory.
++MOZ_ARG_WITH_STRING(android-distribution-directory,
++[  --with-android-distribution-directory=dir
++                          Optional Pale Moon for Android partner distribution directory.],
++  MOZ_ANDROID_DISTRIBUTION_DIRECTORY=$withval)
++
++if test -n "$MOZ_ANDROID_DISTRIBUTION_DIRECTORY"; then
++  # A distribution directory must have an assets/distribution directory.
++  if test ! -d "$MOZ_ANDROID_DISTRIBUTION_DIRECTORY/assets/distribution" ; then
++    AC_MSG_ERROR([--with-android-distribution-directory does not contain assets/distribution;
++                  (looked for ${MOZ_ANDROID_DISTRIBUTION_DIRECTORY}/assets/distribution).])
++  fi
++fi
++AC_SUBST(MOZ_ANDROID_DISTRIBUTION_DIRECTORY)
++
++dnl ========================================================
++dnl Ensure Android SDK and build-tools versions depending on
++dnl mobile target.
++dnl ========================================================
++
++case "$MOZ_BUILD_APP" in
++mobile/android)
++    dnl target SDK 34; newest installed build-tools; no legacy support AARs
++    MOZ_ANDROID_SDK(34)
++    ;;
++esac
++
+ dnl ========================================================
+ 
+ dnl there are a lot of tests on MOZ_ENABLE_GTK below, that are more convenient
+@@ -2386,6 +2494,15 @@ fi
+ AC_DEFINE_UNQUOTED(MOZ_DISTRIBUTION_ID,"$MOZ_DISTRIBUTION_ID")
+ AC_SUBST(MOZ_DISTRIBUTION_ID)
+ 
++dnl ========================================================
++dnl Google Play Services, placed here so it can depend on
++dnl values set by configure.sh above.
++dnl ========================================================
++
++MOZ_ANDROID_GOOGLE_PLAY_SERVICES
++MOZ_ANDROID_GOOGLE_CLOUD_MESSAGING
++MOZ_ANDROID_INSTALL_TRACKING
++
+  dnl ========================================================
+  dnl = Pango
+  dnl ========================================================
+@@ -2478,7 +2595,7 @@ dnl --enable-webrtc to override.  Can disable for everything in
+ dnl the master list above.
+ if test -n "$MOZ_WEBRTC"; then
+     case "$target" in
+-    *-linux*|*-mingw*|*-darwin*|*-dragonfly*|*-freebsd*|*-netbsd*|*-openbsd*)
++    *-linux*|*-mingw*|*-darwin*|*-android*|*-linuxandroid*|*-dragonfly*|*-freebsd*|*-netbsd*|*-openbsd*)
+         dnl Leave enabled
+         ;;
+     *)
+@@ -2681,9 +2798,11 @@ AC_SUBST(MOZ_SCTP)
+ AC_SUBST(MOZ_SRTP)
+ AC_SUBST_LIST(MOZ_WEBRTC_X11_LIBS)
+ 
+-dnl Use integers over floats for audio on ARM
+-dnl because it's more efficient.
+-if test "$CPU_ARCH" = "arm"; then
++dnl Use integers over floats for audio on Android
++dnl (regardless of the CPU architecture, because audio
++dnl backends for those platforms don't support floats). We also
++dnl use integers on ARM with other OS, because it's more efficient.
++if test "$OS_TARGET" = "Android" -o "$CPU_ARCH" = "arm"; then
+     MOZ_SAMPLE_TYPE_S16=1
+     AC_DEFINE(MOZ_SAMPLE_TYPE_S16)
+     AC_SUBST(MOZ_SAMPLE_TYPE_S16)
+@@ -2923,7 +3042,7 @@ dnl ========================================================
+ 
+ dnl If using Desktop Linux, ensure that the PA library is available
+ case "$OS_TARGET" in
+-WINNT|Darwin)
++WINNT|Darwin|Android|OpenBSD)
+     ;;
+ *)
+     MOZ_PULSEAUDIO=1
+@@ -3134,6 +3253,9 @@ if test "$MOZ_GAMEPAD"; then
+         fi
+         MOZ_GAMEPAD_BACKEND=linux
+         ;;
++    Android)
++        MOZ_GAMEPAD_BACKEND=android
++        ;;
+     *)
+         ;;
+    esac
+@@ -3413,6 +3535,14 @@ if test -n "$ENABLE_TESTS"; then
+     if test -n "$_WIN32_MSVC"; then
+           AC_DEFINE_UNQUOTED(_VARIADIC_MAX, 10)
+     fi
++    if test "${OS_TARGET}" = "Android"; then
++        AC_DEFINE(GTEST_OS_LINUX_ANDROID)
++        AC_DEFINE(GTEST_USE_OWN_TR1_TUPLE)
++        AC_DEFINE_UNQUOTED(GTEST_HAS_CLONE, 0)
++        AC_SUBST(GTEST_OS_LINUX_ANDROID)
++        AC_SUBST(GTEST_USE_OWN_TR1_TUPLE)
++        AC_SUBST(GTEST_HAS_CLONE)
++    fi
+ fi
+ 
+ dnl ========================================================
+@@ -3580,7 +3710,7 @@ if test -n "$MOZ_DEBUG"; then
+ fi
+ 
+ case "${OS_TARGET}" in
+-WINNT|Darwin)
++Android|WINNT|Darwin)
+   MOZ_GLUE_IN_PROGRAM=
+   ;;
+ *)
+@@ -4512,6 +4642,13 @@ AC_SUBST_LIST(MOZ_CAIRO_LIBS)
+ AC_SUBST_LIST(MOZ_CAIRO_OSLIBS)
+ AC_SUBST(MOZ_TREE_PIXMAN)
+ 
++case "$MOZ_WIDGET_TOOLKIT" in
++android)
++    TK_CFLAGS="$MOZ_CAIRO_CFLAGS $MOZ_PIXMAN_CFLAGS"
++    TK_LIBS="$MOZ_CAIRO_LIBS $MOZ_PIXMAN_LIBS"
++    ;;
++esac
++
+ dnl ========================================================
+ dnl necko configuration options
+ dnl ========================================================
+@@ -4527,6 +4664,8 @@ MOZ_ARG_DISABLE_BOOL(necko-wifi,
+ 
+ if test "$MOZ_NECKO_WIFI"; then
+   case "$OS_TARGET" in
++    Android)
++      ;;
+     Darwin)
+       NECKO_WIFI=1
+       ;;
+@@ -4617,6 +4756,11 @@ AC_SUBST(MOZ_TOOLKIT_SEARCH)
+ AC_SUBST(MOZ_FEEDS)
+ 
+ AC_SUBST(ENABLE_TESTS)
++AC_SUBST(MOZ_ANDROID_ANR_REPORTER)
++AC_SUBST(MOZ_ANDROID_APPLICATION_CLASS)
++AC_SUBST(MOZ_ANDROID_BROWSER_INTENT_CLASS)
++AC_SUBST(MOZ_ANDROID_SEARCH_INTENT_CLASS)
++AC_SUBST(MOZ_INSTALL_TRACKING)
+ 
+ AC_SUBST(MOZ_UNIVERSALCHARDET)
+ AC_SUBST(ACCESSIBILITY)
+@@ -4714,7 +4858,17 @@ AC_SUBST(MOZ_MACBUNDLE_TYPE)
+ dnl ========================================================
+ dnl = Child Process Name for IPC
+ dnl ========================================================
+-MOZ_CHILD_PROCESS_NAME="plugin-container${BIN_SUFFIX}"
++if test "$MOZ_WIDGET_TOOLKIT" != "android"; then
++  MOZ_CHILD_PROCESS_NAME="plugin-container${BIN_SUFFIX}"
++else
++  # We want to let Android unpack the file at install time, but it only does
++  # so if the file is named libsomething.so. The lib/ path is also required
++  # because the unpacked file will be under the lib/ subdirectory and will
++  # need to be executed from that path.
++  MOZ_CHILD_PROCESS_NAME="libplugin-container.so"
++  MOZ_CHILD_PROCESS_NAME_PIE="libplugin-container-pie.so"
++  AC_SUBST(MOZ_CHILD_PROCESS_NAME_PIE)
++fi
+ MOZ_CHILD_PROCESS_BUNDLE="plugin-container.app/Contents/MacOS/"
+ 
+ AC_SUBST(MOZ_CHILD_PROCESS_NAME)
+@@ -4758,6 +4912,18 @@ if test -z "$MOZ_APP_VERSION_DISPLAY"; then
+    MOZ_APP_VERSION_DISPLAY=$MOZ_APP_VERSION
+ fi
+ 
++if test -z "$ANDROID_PACKAGE_NAME" ; then
++   ANDROID_PACKAGE_NAME="org.mozilla.$MOZ_APP_NAME"
++fi
++
++# Mozilla released Firefox for Android {Release,Beta} and {Aurora,Nightly} to
++# the public with specific common shared IDs and we need to keep them
++# consistent forever.  The specific common values are set by per-channel
++# branding; all other channels use a generic sharedID, set below.
++if test -z "$MOZ_ANDROID_SHARED_ID" ; then
++   MOZ_ANDROID_SHARED_ID="${ANDROID_PACKAGE_NAME}.sharedID"
++fi
++
+ # For extensions and langpacks, we require a max version that is compatible
+ # across security releases. MOZ_APP_MAXVERSION is our method for doing that.
+ # 24.0a1 and 24.0a2 aren't affected
+@@ -4783,6 +4949,9 @@ AC_SUBST(MOZ_APP_BASENAME)
+ AC_SUBST(MOZ_APP_VENDOR)
+ AC_SUBST(MOZ_APP_PROFILE)
+ AC_SUBST(MOZ_APP_ID)
++AC_SUBST(MOZ_APP_ANDROID_VERSION_CODE)
++AC_SUBST(MOZ_ANDROID_SHARED_ID)
++AC_SUBST(MOZ_ANDROID_GCM_SENDERID)
+ AC_SUBST(MAR_CHANNEL_ID)
+ AC_SUBST(ACCEPTED_MAR_CHANNEL_IDS)
+ AC_SUBST(MOZ_PROFILE_MIGRATOR)
+diff --git a/python/mozbuild/mozbuild/backend/recursivemake.py b/python/mozbuild/mozbuild/backend/recursivemake.py
+index 3a60312dcb..edee3af28b 100644
+--- a/python/mozbuild/mozbuild/backend/recursivemake.py
++++ b/python/mozbuild/mozbuild/backend/recursivemake.py
+@@ -29,6 +29,10 @@ from mozbuild.frontend.context import (
+ )
+ from .common import CommonBackend
+ from ..frontend.data import (
++    AndroidAssetsDirs,
++    AndroidResDirs,
++    AndroidExtraResDirs,
++    AndroidExtraPackages,
+     ChromeManifestEntry,
+     ConfigFileSubstitution,
+     ContextDerived,
+@@ -583,6 +587,26 @@ class RecursiveMakeBackend(CommonBackend):
+         elif isinstance(obj, ObjdirPreprocessedFiles):
+             self._process_final_target_pp_files(obj, obj.files, backend_file, 'OBJDIR_PP_FILES')
+ 
++        elif isinstance(obj, AndroidResDirs):
++            # Order matters.
++            for p in obj.paths:
++                backend_file.write('ANDROID_RES_DIRS += %s\n' % p.full_path)
++
++        elif isinstance(obj, AndroidAssetsDirs):
++            # Order matters.
++            for p in obj.paths:
++                backend_file.write('ANDROID_ASSETS_DIRS += %s\n' % p.full_path)
++
++        elif isinstance(obj, AndroidExtraResDirs):
++            # Order does not matter.
++            for p in sorted(set(p.full_path for p in obj.paths)):
++                backend_file.write('ANDROID_EXTRA_RES_DIRS += %s\n' % p)
++
++        elif isinstance(obj, AndroidExtraPackages):
++            # Order does not matter.
++            for p in sorted(set(obj.packages)):
++                backend_file.write('ANDROID_EXTRA_PACKAGES += %s\n' % p)
++
+         elif isinstance(obj, ChromeManifestEntry):
+             self._process_chrome_manifest_entry(obj, backend_file)
+ 
+@@ -1089,9 +1113,11 @@ class RecursiveMakeBackend(CommonBackend):
+         if jar.generated_sources:
+             backend_file.write('%s_PP_JAVAFILES := %s\n' %
+                 (target, ' '.join(mozpath.join('generated', f) for f in jar.generated_sources)))
+-        if jar.extra_jars:
++        extra_jars = sorted(set(
++            j for j in jar.extra_jars if j is not None))
++        if extra_jars:
+             backend_file.write('%s_EXTRA_JARS := %s\n' %
+-                (target, ' '.join(sorted(set(jar.extra_jars)))))
++                (target, ' '.join(extra_jars)))
+         if jar.javac_flags:
+             backend_file.write('%s_JAVAC_FLAGS := %s\n' %
+                 (target, ' '.join(jar.javac_flags)))
+diff --git a/python/mozbuild/mozbuild/configure/constants.py b/python/mozbuild/mozbuild/configure/constants.py
+index dcd6d1b960..75def20ad3 100644
+--- a/python/mozbuild/mozbuild/configure/constants.py
++++ b/python/mozbuild/mozbuild/configure/constants.py
+@@ -16,6 +16,7 @@ CompilerType = EnumString.subclass(
+ )
+ 
+ OS = EnumString.subclass(
++    'Android',
+     'DragonFly',
+     'FreeBSD',
+     'GNU',
+diff --git a/python/mozbuild/mozbuild/frontend/context.py b/python/mozbuild/mozbuild/frontend/context.py
+index 8e89f606f2..713265758f 100644
+--- a/python/mozbuild/mozbuild/frontend/context.py
++++ b/python/mozbuild/mozbuild/frontend/context.py
+@@ -881,6 +881,28 @@ VARIABLES = {
+         """),
+ 
+     # Variables controlling reading of other frontend files.
++    # Variables controlling Android packaging.
++    'ANDROID_GENERATED_RESFILES': (StrictOrderingOnAppendList, list,
++        """Android resource files generated as part of the build."""),
++
++    'ANDROID_APK_NAME': (str, str,
++        """The name of an Android APK file to generate."""),
++
++    'ANDROID_APK_PACKAGE': (str, str,
++        """The name of the Android package to generate R.java for, like org.mozilla.gecko."""),
++
++    'ANDROID_EXTRA_PACKAGES': (StrictOrderingOnAppendList, list,
++        """The name of extra Android packages to generate R.java for, like ['org.mozilla.other']."""),
++
++    'ANDROID_EXTRA_RES_DIRS': (ContextDerivedTypedListWithItems(Path, List), list,
++        """Android extra package resource directories."""),
++
++    'ANDROID_RES_DIRS': (ContextDerivedTypedListWithItems(Path, List), list,
++        """Android resource directories."""),
++
++    'ANDROID_ASSETS_DIRS': (ContextDerivedTypedListWithItems(Path, List), list,
++        """Android assets directories."""),
++
+     'SOURCES': (ContextDerivedTypedListWithItems(Path, StrictOrderingOnAppendListWithFlagsFactory({'no_pgo': bool, 'flags': List})), list,
+         """Source code files.
+ 
+@@ -1466,6 +1488,9 @@ VARIABLES = {
+         """List of manifest files defining jetpack addon tests.
+         """),
+ 
++    'ANDROID_INSTRUMENTATION_MANIFESTS': (ManifestparserManifestList, list,
++        """List of manifest files defining Android instrumentation tests."""),
++
+     'FIREFOX_UI_FUNCTIONAL_MANIFESTS': (ManifestparserManifestList, list,
+         """List of manifest files defining firefox-ui-functional tests.
+         """),
+diff --git a/python/mozbuild/mozbuild/frontend/data.py b/python/mozbuild/mozbuild/frontend/data.py
+index 1757f84677..f2fbe03368 100644
+--- a/python/mozbuild/mozbuild/frontend/data.py
++++ b/python/mozbuild/mozbuild/frontend/data.py
+@@ -948,6 +948,54 @@ class GeneratedFile(ContextDerived):
+         self.inputs = inputs
+         self.flags = flags
+ 
++class AndroidResDirs(ContextDerived):
++    """Represents Android resource directories."""
++
++    __slots__ = (
++        'paths',
++    )
++
++    def __init__(self, context, paths):
++        ContextDerived.__init__(self, context)
++        self.paths = paths
++
++class AndroidAssetsDirs(ContextDerived):
++    """Represents Android assets directories."""
++
++    __slots__ = (
++        'paths',
++    )
++
++    def __init__(self, context, paths):
++        ContextDerived.__init__(self, context)
++        self.paths = paths
++
++class AndroidExtraResDirs(ContextDerived):
++    """Represents Android extra resource directories.
++
++    Extra resources are resources provided by libraries and included in a
++    packaged APK, but not otherwise redistributed.
++    """
++
++    __slots__ = (
++        'paths',
++    )
++
++    def __init__(self, context, paths):
++        ContextDerived.__init__(self, context)
++        self.paths = paths
++
++class AndroidExtraPackages(ContextDerived):
++    """Represents Android extra packages."""
++
++    __slots__ = (
++        'packages',
++    )
++
++    def __init__(self, context, packages):
++        ContextDerived.__init__(self, context)
++        self.packages = packages
++
+ class ChromeManifestEntry(ContextDerived):
+     """Represents a chrome.manifest entry."""
+ 
+diff --git a/python/mozbuild/mozbuild/frontend/emitter.py b/python/mozbuild/mozbuild/frontend/emitter.py
+index 2d59d75bef..9a723206a8 100644
+--- a/python/mozbuild/mozbuild/frontend/emitter.py
++++ b/python/mozbuild/mozbuild/frontend/emitter.py
+@@ -23,6 +23,10 @@ import mozinfo
+ import pytoml
+ 
+ from .data import (
++    AndroidAssetsDirs,
++    AndroidExtraPackages,
++    AndroidExtraResDirs,
++    AndroidResDirs,
+     BaseSources,
+     BrandingFiles,
+     ChromeManifestEntry,
+@@ -783,6 +787,9 @@ class TreeMetadataEmitter(LoggingMixin):
+         passthru = VariablePassthru(context)
+         varlist = [
+             'ALLOW_COMPILER_WARNINGS',
++            'ANDROID_APK_NAME',
++            'ANDROID_APK_PACKAGE',
++            'ANDROID_GENERATED_RESFILES',
+             'DISABLE_STL_WRAPPING',
+             'EXTRA_DSO_LDOPTS',
+             'PYTHON_UNIT_TESTS',
+diff --git a/toolkit/modules/moz.build b/toolkit/modules/moz.build
+index d113b4e5ce..9c820e3b75 100644
+--- a/toolkit/modules/moz.build
++++ b/toolkit/modules/moz.build
+@@ -103,13 +103,14 @@ EXTRA_PP_JS_MODULES += [
+ ]
+ 
+ 
+-EXTRA_PP_JS_MODULES += [
+-    'LightweightThemeConsumer.jsm',
+-]
++if 'Android' != CONFIG['OS_TARGET']:
++    EXTRA_PP_JS_MODULES += [
++        'LightweightThemeConsumer.jsm',
++    ]
+ 
+-DIRS += [
+-    'subprocess',
+-]
++    DIRS += [
++        'subprocess',
++    ]
+ 
+ 
+ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':

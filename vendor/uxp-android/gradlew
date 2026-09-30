@@ -1,0 +1,6 @@
+#!/bin/sh
+# Gradle wrapper entry point for the vendored mobile/android build.
+# Delegates to the in-tree wrapper jar under gradle/wrapper/.
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec java -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" \
+  org.gradle.wrapper.GradleWrapperMain "$@"

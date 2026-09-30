@@ -1,18 +1,29 @@
-# Example mozconfig for the Android port (status: plumbing only — see
-# docs/PORTING.md scope ladder; this does NOT produce a buildable browser).
-# Place in upstream/pale-moon/ or upstream/uxp depending on layout.
-
+# Android aarch64 bring-up mozconfig (unified LLVM NDK).
 ac_add_options --target=aarch64-linux-android
 ac_add_options --enable-application=mobile/android
+ac_add_options --enable-noncomm-build
 ac_add_options --enable-default-toolkit=cairo-android
 
 ac_add_options --with-android-ndk="$ANDROID_NDK"
 ac_add_options --with-android-toolchain="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64"
 ac_add_options --with-android-version=21
 
-# Recommended while the port is bring-up only:
 ac_add_options --disable-tests
 ac_add_options --disable-debug
 ac_add_options --enable-optimize
 
+_TC="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64"
+export CC="$_TC/bin/aarch64-linux-android21-clang"
+export CXX="$_TC/bin/aarch64-linux-android21-clang++"
+export CPP="$_TC/bin/aarch64-linux-android21-clang -E"
+export CXXCPP="$_TC/bin/aarch64-linux-android21-clang++ -E"
+export AS="$_TC/bin/aarch64-linux-android21-clang"
+export AR="$_TC/bin/llvm-ar"
+export RANLIB="$_TC/bin/llvm-ranlib"
+export STRIP="$_TC/bin/llvm-strip"
+export OBJDUMP="$_TC/bin/llvm-objdump"
+export NM="$_TC/bin/llvm-nm"
+
 mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/../obj-android-aarch64
+ac_add_options --disable-pulseaudio
+ac_add_options --disable-alsa
