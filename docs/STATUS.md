@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30 (full `./mach build` + `./mach package` produce a signed, installable aarch64 APK)._
+_Last updated: 2026-09-30 (APK installs and launches on an Android 34 emulator; mozglue's custom linker loads libxul + all deps and runs static initializers; currently crashes inside libxul's static-init phase — see below)._
 
 ## Verified
 
@@ -105,6 +105,20 @@ _Last updated: 2026-09-30 (full `./mach build` + `./mach package` produce a sign
   API 28).
 - `python/mozbuild/mozpack/files.py`, `recursivemake.py`, `emitter.py`,
   `generate_browsersearch.py`: py3 str/bytes fixes for the packaging path.
+- `config/config.mk`: `-static-libstdc++` for `OS_TARGET=Android` — the
+  custom linker loads packaged .so files itself, so nothing may need
+  `libc++_shared.so` (same approach as the 2019 port).
+- `mobile/android/installer/package-manifest.in` (vendor):
+  `libhunspell.so` added to `assets/` — it is a `NEEDED` dep of libxul
+  and its absence aborted the libxul load.
+- `mozglue/linker/XZStream.cpp`: `ParseUncompressedSize()` now sums **all**
+  index records instead of reading only the first. Modern `xz -T` writes
+  multi-block streams (4 blocks for libxul); only the first block's size
+  was used, producing a 25 MB cache file for an 80 MB libxul → SIGBUS on
+  segment mapping. Fixed file now decompresses fully (verified in logcat:
+  `XZStream decoded 80352792`).
+- `mozglue/linker/Elfxx.h`: aarch64 `R_AARCH64_ABS64/GLOB_DAT/JUMP_SLOT/
+  RELATIVE` constants for the custom linker.
 - Remaining C++ interface fixes across `dom/plugins/ipc`, `ipc/chromium`,
   `hal`, `widget`, `gfx`, `netwerk`, `security`, `toolkit`, `xpcom`,
   `memory/jemalloc`, `mozglue/linker` to reconcile the 2019 Android code
@@ -126,12 +140,45 @@ _Last updated: 2026-09-30 (full `./mach build` + `./mach package` produce a sign
 - Vendored AARs under `$ANDROID_HOME/extras/{android,google}/m2repository/`
   (incl. play-services-*-8.4.0) — see `scripts/` for install steps.
 
+## Runtime status (verified on emulator, Android 34 / x86_64 + ndk_translation)
+
+AVD `nocturne-emu` (google_apis x86_64, abi list includes arm64-v8a via
+ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
+
+- `adb install -r dist/fennec-52.6.0.linux-android-aarch64.apk`: succeeds.
+- `am start -n org.mozilla.fennec_ubuntu/.App`: **the app launches.**
+  Java frontend verified working end-to-end: LauncherActivity → BrowserApp,
+  profile migration, preferences, network listener, search engine manager,
+  and the home screen UI renders (GLES/EGL).
+- mozglue's custom linker on aarch64 works: decompresses every xz'd
+  library (incl. 80 MB libxul), resolves all relocations
+  (`ABS64/GLOB_DAT/JUMP_SLOT/RELATIVE`), loads NSS/NSPR/sqlite/hunspell/etc.,
+  and begins running libxul's C++ static initializers.
+- **Current crash** (deterministic): `SIGSEGV` fault addr `0x0`
+  (`SI_KERNEL`) on the Gecko thread inside libxul's 4th `.init_array`
+  entry — `_GLOBAL__sub_I_Unified_cpp_media_libstagefright1.cpp`
+  (stagefright `AAtomizer`/`String` statics). Relocations are all
+  resolved (no "Relocation to NULL" warnings), so the null is produced
+  inside the init path itself (function-pointer/vtable/indirect call
+  under investigation). Debug commands used:
+  `adb shell pm clear org.mozilla.fennec_ubuntu`, then
+  `am start -n org.mozilla.fennec_ubuntu/.App --es env0 MOZ_DEBUG_LINKER=1 --es env1 MOZ_LINKER_ONDEMAND=0`.
+- `MOZ_LINKER_ONDEMAND=0` (eager page mapping) is required on this
+  emulator — without it the run dies earlier with `SEGV_ACCERR` on the
+  main thread; the fault-handler-based lazy-page path is untested on
+  real arm64 hardware.
+- Emulation caveat: everything above runs under ndk_translation
+  (arm64→x86_64). `lldb-server`/gdbserver cannot run inside it, so
+  native debugging of the init crash is limited to logcat
+  instrumentation; some remaining crashes may be translation artifacts
+  that do not exist on real arm64 devices.
+
 ## Unverified / partial (honest caveats)
 
-- **The APK has never run.** No emulator/device testing exists on this
-  box. `libxul.so` links and the APK packages, but runtime behavior
-  (widget/compositor bring-up, JNI, first paint) is unverified and may
-  well crash on launch. This is the next critical milestone.
+- **The app does not yet reach XRE/first paint.** It gets as far as
+  libxul's static-initializer phase, then hits the crash described
+  above. Everything past that (nsAppShell, nsWindow, compositor, XUL
+  load, content process) is unverified.
 - Branding is still Fennec: package `org.mozilla.fennec_ubuntu`,
   label "Fennec", APK filename `fennec-52.6.0.linux-android-aarch64.apk`.
   No Pale Moon branding/product-name pass has been done.
@@ -152,9 +199,13 @@ _Last updated: 2026-09-30 (full `./mach build` + `./mach package` produce a sign
 
 ## Known missing pieces (next work)
 
-1. **Runtime verification**: install the APK on a device/emulator, get
-   `GeckoApp` → `nsAppShell` → compositor → first paint working; triage
-   crashes (mozglue linker, JNI wrapper mismatches, `nsWindow` bring-up).
+1. **Fix the libxul static-init crash** (null fetch/deref inside
+   `_GLOBAL__sub_I_Unified_cpp_media_libstagefright1.cpp`'s call chain —
+   `AAtomizer` ctor / `initialize_string8`/`initialize_string16` /
+   `__cxa_atexit` wrap). Then continue bring-up to `nsAppShell` →
+   `nsWindow` → compositor → first paint. A real arm64 device (native
+   debugging) may be needed if the next crashes prove to be
+   ndk_translation artifacts rather than code bugs.
 2. Pale Moon branding/product pass (app name, package id, APK filename,
    `MOZ_APP_*` branding) — currently Fennec.
 3. Java frontend SDK modernization (targetSdk, Gradle 8, API 34) —

@@ -30,6 +30,23 @@ index 397576050d..60c43cde35 100644
  
      # AC_CONFIG_COMMANDS actually only registers tags, not file names
      # but most commands are tagged with the file name they create.
+diff --git a/config/config.mk b/config/config.mk
+index 7425a16435..255d387907 100644
+--- a/config/config.mk
++++ b/config/config.mk
+@@ -261,6 +261,12 @@ CFLAGS		= $(OS_CPPFLAGS) $(OS_CFLAGS)
+ CXXFLAGS	= $(OS_CPPFLAGS) $(OS_CXXFLAGS)
+ LDFLAGS		= $(OS_LDFLAGS) $(MOZBUILD_LDFLAGS) $(MOZ_FIX_LINK_PATHS)
+ 
++# mozglue's custom linker loads the packaged .so files itself, so nothing
++# may depend on libc++_shared.so (the 2019 port used a static STL too).
++ifeq (Android,$(OS_TARGET))
++LDFLAGS		+= -static-libstdc++
++endif
++
+ ifdef MOZ_OPTIMIZE
+ ifeq (1,$(MOZ_OPTIMIZE))
+ ifneq (,$(if $(MOZ_PROFILE_GENERATE)$(MOZ_PROFILE_USE),$(MOZ_PGO_OPTIMIZE_FLAGS)))
 diff --git a/config/rules.mk b/config/rules.mk
 index 75b4fed134..5ce135fe00 100644
 --- a/config/rules.mk
@@ -537,7 +554,7 @@ index ec0a2b32b4..046d918f4a 100644
  {
  public:
 diff --git a/mozglue/linker/XZStream.cpp b/mozglue/linker/XZStream.cpp
-index 7ddbd875ac..66b4b44da0 100644
+index 7ddbd875ac..72fb489ed0 100644
 --- a/mozglue/linker/XZStream.cpp
 +++ b/mozglue/linker/XZStream.cpp
 @@ -18,7 +18,7 @@ ParseVarLenInt(const uint8_t* aBuf, size_t aBufSize, uint64_t* aValue)
@@ -549,6 +566,45 @@ index 7ddbd875ac..66b4b44da0 100644
  
    *aValue = aBuf[0] & 0x7F;
    size_t i = 0;
+@@ -186,7 +186,7 @@ XZStream::ParseUncompressedSize() const
+   const uint8_t* index = end - kFooterSize - indexSize;
+ 
+   // The index consists of a one byte indicator followed by a VLI field for the
+-  // number of records (1 expected) followed by a list of records. One record
++  // number of records followed by a list of records. One record
+   // contains a VLI field for unpadded size followed by a VLI field for
+   // uncompressed size.
+   if (memcmp(reinterpret_cast<const void*>(kIndexIndicator),
+@@ -201,13 +201,23 @@ XZStream::ParseUncompressedSize() const
+   if (!numRecords) {
+     return 0;
+   }
+-  uint64_t unpaddedSize = 0;
+-  index += ParseVarLenInt(index, end - index, &unpaddedSize);
+-  if (!unpaddedSize) {
+-    return 0;
+-  }
++  // Multi-threaded xz writes one record per block; sum them all.
+   uint64_t uncompressedSize = 0;
+-  index += ParseVarLenInt(index, end - index, &uncompressedSize);
++  for (uint64_t i = 0; i < numRecords; i++) {
++    uint64_t unpaddedSize = 0;
++    size_t consumed = ParseVarLenInt(index, end - index, &unpaddedSize);
++    if (!consumed || !unpaddedSize) {
++      return 0;
++    }
++    index += consumed;
++    uint64_t recordSize = 0;
++    consumed = ParseVarLenInt(index, end - index, &recordSize);
++    if (!consumed) {
++      return 0;
++    }
++    index += consumed;
++    uncompressedSize += recordSize;
++  }
+ 
+   return uncompressedSize;
+ }
 diff --git a/netwerk/build/moz.build b/netwerk/build/moz.build
 index ebafda48bb..0bde117bf3 100644
 --- a/netwerk/build/moz.build
