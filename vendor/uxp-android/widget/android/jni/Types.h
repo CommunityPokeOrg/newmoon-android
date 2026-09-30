@@ -54,9 +54,9 @@ template<class Cls> struct TypeAdapter<LocalRef<Cls>> {
 #endif
 
 template<class Cls> constexpr jobject
-    (JNIEnv::*TypeAdapter<LocalRef<Cls>>::Call)(jobject, jmethodID, jvalue*) MOZ_JNICALL_ABI;
+    (JNIEnv::*TypeAdapter<LocalRef<Cls>>::Call)(jobject, jmethodID, const jvalue*) MOZ_JNICALL_ABI;
 template<class Cls> constexpr jobject
-    (JNIEnv::*TypeAdapter<LocalRef<Cls>>::StaticCall)(jclass, jmethodID, jvalue*) MOZ_JNICALL_ABI;
+    (JNIEnv::*TypeAdapter<LocalRef<Cls>>::StaticCall)(jclass, jmethodID, const jvalue*) MOZ_JNICALL_ABI;
 template<class Cls> constexpr jobject
     (JNIEnv::*TypeAdapter<LocalRef<Cls>>::Get)(jobject, jfieldID);
 template<class Cls> constexpr jobject

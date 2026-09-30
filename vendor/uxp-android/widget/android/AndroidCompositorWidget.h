@@ -22,7 +22,7 @@ class AndroidCompositorWidget final : public InProcessCompositorWidget
 public:
     using InProcessCompositorWidget::InProcessCompositorWidget;
 
-    AndroidCompositorWidget* AsAndroid() override { return this; }
+    AndroidCompositorWidget* AsAndroid() { return this; }
 
     void SetFirstPaintViewport(const LayerIntPoint& aOffset,
                                const CSSToLayerScale& aZoom,

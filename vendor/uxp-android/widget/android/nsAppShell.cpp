@@ -55,7 +55,6 @@
 
 #include "AndroidAlerts.h"
 #include "ANRReporter.h"
-#include "GeckoBatteryManager.h"
 #include "GeckoNetworkManager.h"
 #include "GeckoScreenOrientation.h"
 #include "PrefsHelper.h"
@@ -348,7 +347,7 @@ public:
 
     static void OnFullScreenPluginHidden(jni::Object::Param aView)
     {
-        nsPluginInstanceOwner::ExitFullScreen(aView.Get());
+        // Full-screen NPAPI plugins are not supported; nothing to do.
     }
 };
 
@@ -371,7 +370,6 @@ nsAppShell::nsAppShell()
         AndroidBridge::ConstructBridge();
         GeckoAppShellSupport::Init();
         GeckoThreadSupport::Init();
-        mozilla::GeckoBatteryManager::Init();
         mozilla::GeckoNetworkManager::Init();
         mozilla::GeckoScreenOrientation::Init();
         mozilla::PrefsHelper::Init();

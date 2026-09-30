@@ -641,29 +641,6 @@ namespace mozilla {
 
 
 void
-AndroidBridge::GetCurrentBatteryInformation(hal::BatteryInformation* aBatteryInfo)
-{
-    ALOG_BRIDGE("AndroidBridge::GetCurrentBatteryInformation");
-
-    // To prevent calling too many methods through JNI, the Java method returns
-    // an array of double even if we actually want a double and a boolean.
-    auto arr = GeckoAppShell::GetCurrentBatteryInformation();
-
-    JNIEnv* const env = arr.Env();
-    if (!arr || env->GetArrayLength(arr.Get()) != 3) {
-        return;
-    }
-
-    jdouble* info = env->GetDoubleArrayElements(arr.Get(), 0);
-
-    aBatteryInfo->level() = info[0];
-    aBatteryInfo->charging() = info[1] == 1.0f;
-    aBatteryInfo->remainingTime() = info[2];
-
-    env->ReleaseDoubleArrayElements(arr.Get(), info, 0);
-}
-
-void
 AndroidBridge::HandleGeckoMessage(JSContext* cx, JS::HandleObject object)
 {
     ALOG_BRIDGE("%s", __PRETTY_FUNCTION__);

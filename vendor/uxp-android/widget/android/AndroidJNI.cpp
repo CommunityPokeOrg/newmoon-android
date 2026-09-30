@@ -30,7 +30,6 @@
 
 #include "mozilla/layers/APZCTreeManager.h"
 #include "nsPluginInstanceOwner.h"
-#include "AndroidSurfaceTexture.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;

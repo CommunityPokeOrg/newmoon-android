@@ -175,8 +175,19 @@ public class CellScannerImplementation implements CellScanner.CellScannerImpl {
             return Collections.emptyList();
         }
 
-        @SuppressWarnings("deprecation")
-        Collection<NeighboringCellInfo> cells = mTelephonyManager.getNeighboringCellInfo();
+        // getNeighboringCellInfo() was removed from the SDK in API 30; only
+        // reachable on API < 22 anyway, so go through reflection.
+        final Collection<NeighboringCellInfo> cells;
+        try {
+            @SuppressWarnings({"deprecation", "unchecked"})
+            Collection<NeighboringCellInfo> result =
+                (Collection<NeighboringCellInfo>) TelephonyManager.class
+                    .getMethod("getNeighboringCellInfo")
+                    .invoke(mTelephonyManager);
+            cells = result;
+        } catch (ReflectiveOperationException | ClassCastException e) {
+            return Collections.emptyList();
+        }
         if (cells == null || cells.isEmpty()) {
             return Collections.emptyList();
         }

@@ -785,16 +785,26 @@ public class BrowserApp extends GeckoApp
         if (AppConstants.MOZ_ANDROID_BEAM) {
             NfcAdapter nfc = NfcAdapter.getDefaultAdapter(this);
             if (nfc != null) {
-                nfc.setNdefPushMessageCallback(new NfcAdapter.CreateNdefMessageCallback() {
-                    @Override
-                    public NdefMessage createNdefMessage(NfcEvent event) {
-                        Tab tab = Tabs.getInstance().getSelectedTab();
-                        if (tab == null || tab.isPrivate()) {
-                            return null;
+                // Android Beam was removed in API 29; invoke reflectively so
+                // this still works on older devices.
+                final NfcAdapter.CreateNdefMessageCallback callback =
+                    new NfcAdapter.CreateNdefMessageCallback() {
+                        @Override
+                        public NdefMessage createNdefMessage(NfcEvent event) {
+                            Tab tab = Tabs.getInstance().getSelectedTab();
+                            if (tab == null || tab.isPrivate()) {
+                                return null;
+                            }
+                            return new NdefMessage(new NdefRecord[] { NdefRecord.createUri(tab.getURL()) });
                         }
-                        return new NdefMessage(new NdefRecord[] { NdefRecord.createUri(tab.getURL()) });
-                    }
-                }, this);
+                    };
+                try {
+                    NfcAdapter.class.getMethod("setNdefPushMessageCallback",
+                            NfcAdapter.CreateNdefMessageCallback.class, Activity.class)
+                        .invoke(nfc, callback, this);
+                } catch (ReflectiveOperationException e) {
+                    // Android Beam is not supported on this device.
+                }
             }
         }
 
@@ -1479,7 +1489,13 @@ public class BrowserApp extends GeckoApp
                 // null this out even though the docs say it's not needed,
                 // because the source code looks like it will only do this
                 // automatically on API 14+
-                nfc.setNdefPushMessageCallback(null, this);
+                try {
+                    NfcAdapter.class.getMethod("setNdefPushMessageCallback",
+                            NfcAdapter.CreateNdefMessageCallback.class, Activity.class)
+                        .invoke(nfc, null, this);
+                } catch (ReflectiveOperationException e) {
+                    // Android Beam is not supported on this device.
+                }
             }
         }
 

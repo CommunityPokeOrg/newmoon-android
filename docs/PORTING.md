@@ -8,7 +8,9 @@ recovered (see `vendor/` and `ARCHAEOLOGY.md`), but it is an m-esr52-era
 (≈Firefox 52/Goanna-2017) codebase. Current UXP has had ~8 years of widget,
 compositor, IPC and build-system change since it was deleted. This
 repository holds the recovered source plus the first *verified* slices of
-revival work; it is not a browser and cannot render a page today.
+revival work; it now compiles and packages a signed aarch64 APK, but the
+APK has never been run on a device/emulator, so whether it renders a page
+is unverified (see `STATUS.md`).
 
 ## Architecture the historical port used
 
@@ -64,12 +66,12 @@ Key integration surfaces a revival must restore or rewrite:
 | L0 | Repo: recovered source + archaeology + plan | **done** |
 | L1 | Configure plumbing: `*-linux-android` target recognized | **done** (patch 0002) |
 | L2 | NSPR cross-build for aarch64 with NDK r19+ | **verified** (patch 0001 → `libnspr4.so` etc.) |
-| L3 | mozglue (+custom linker) cross-build | not started |
-| L4 | `js` (SpiderMonkey) cross-build | not started |
-| L5 | `widget/android` re-landed + `hal`/`dom` glue compiles | not started |
-| L6 | Headless `libxul.so` for aarch64 | blocked on L3–L5 |
-| L7 | Minimal activity: EGL surface + URL bar | far |
-| L8 | Feature-parity pm4a app | far |
+| L3 | mozglue (+custom linker) cross-build | **done** (`libmozglue.so` shared + `BionicGlue.cpp`) |
+| L4 | `js` (SpiderMonkey) cross-build | **done** (inside `libxul.so`) |
+| L5 | `widget/android` re-landed + `hal`/`dom` glue compiles | **done** (compiles; runtime unverified) |
+| L6 | `libxul.so` for aarch64 | **done** (~19 MB, packaged in APK) |
+| L7 | Activity: EGL surface + URL bar **working at runtime** | unverified — APK never launched |
+| L8 | Feature-parity pm4a app | far — runtime bring-up + branding + androidx/Gradle |
 
 ## Biggest risks / unknowns
 
@@ -87,8 +89,18 @@ Key integration surfaces a revival must restore or rewrite:
 
 ```sh
 scripts/fetch-upstream.sh        # clones pinned UXP + Pale-Moon into upstream/
-scripts/apply-patches.sh         # applies patches/ to upstream/uxp
-scripts/build-nspr-android.sh    # configures+builds nsprpub for aarch64
+scripts/apply-patches.sh         # applies patches/ to upstream/uxp + overlays vendor/
+scripts/build-nspr-android.sh    # configures+builds nsprpub for aarch64 (optional check)
+
+# Full build (produces a signed APK):
+cp mozconfig/mozconfig.android-aarch64 upstream/uxp/mozconfig
+export ANDROID_HOME=<sdk> ANDROID_NDK=<sdk>/ndk/27.2.12479018
+cd upstream/uxp && ./mach build && ./mach package
+# APK: upstream/obj-android-aarch64/dist/fennec-52.6.0.linux-android-aarch64.apk
 ```
 
-Requires: Android NDK r19+ (`ANDROID_NDK` env var), autoconf-era build tools.
+Requires: Android NDK r27+ (`ANDROID_NDK`), Android SDK 34
+(`ANDROID_HOME`, build-tools 34.0.0), JDK 17, ProGuard 6.x at
+`$ANDROID_HOME/tools/proguard/lib/proguard.jar`, vendored AARs under
+`$ANDROID_HOME/extras/`, and `~/.android/debug.keystore` (auto-created by
+the signing rule).

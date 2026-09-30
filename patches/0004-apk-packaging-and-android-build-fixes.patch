@@ -1,0 +1,1044 @@
+diff --git a/build/moz.configure/memory.configure b/build/moz.configure/memory.configure
+index 14182ad551..27721adcef 100644
+--- a/build/moz.configure/memory.configure
++++ b/build/moz.configure/memory.configure
+@@ -96,6 +96,13 @@ def jemalloc_os_define(jemalloc, target):
+ 
+ set_define(jemalloc_os_define, '1')
+ 
++@depends(jemalloc, target)
++def jemalloc_os_define_android(jemalloc, target):
++    if jemalloc and target.os == 'Android':
++        return 'MOZ_MEMORY_ANDROID'
++
++set_define(jemalloc_os_define_android, '1')
++
+ option('--enable-replace-malloc',
+        help='Enable ability to dynamically replace the malloc implementation')
+ 
+diff --git a/build/subconfigure.py b/build/subconfigure.py
+index 397576050d..60c43cde35 100644
+--- a/build/subconfigure.py
++++ b/build/subconfigure.py
+@@ -277,7 +277,8 @@ def run(objdir):
+     config_files, command_files = get_config_files(data)
+     contents = []
+     for f, t in config_files:
+-        contents.append(File(f))
++        if os.path.isfile(f):
++            contents.append(File(f))
+ 
+     # AC_CONFIG_COMMANDS actually only registers tags, not file names
+     # but most commands are tagged with the file name they create.
+diff --git a/config/rules.mk b/config/rules.mk
+index 75b4fed134..5ce135fe00 100644
+--- a/config/rules.mk
++++ b/config/rules.mk
+@@ -1038,6 +1038,13 @@ else
+ normalizepath = $(1)
+ endif
+ 
++###############################################################################
++# Java rules
++###############################################################################
++ifneq (,$(JAVAFILES)$(ANDROID_RESFILES)$(ANDROID_APKNAME)$(JAVA_JAR_TARGETS))
++  include $(MOZILLA_DIR)/config/makefiles/java-build.mk
++endif
++
+ ###############################################################################
+ # Bunch of things that extend the 'export' rule (in order):
+ ###############################################################################
+diff --git a/config/system-headers b/config/system-headers
+index d4a2738293..d5bfa2ef26 100644
+--- a/config/system-headers
++++ b/config/system-headers
+@@ -1,4 +1,16 @@
++#ifdef ANDROID
++android/ashmem.h
++android/log.h
++android/looper.h
++android/native_window.h
++#endif
++#ifdef ANDROID
++android/native_window_jni.h
++#endif
++android_audio/AudioSystem.h
+ atomic.h
++cutils/android_reboot.h
++linux/android_alarm.h
+ nspr.h
+ plarena.h
+ plarenas.h
+@@ -24,6 +36,7 @@ prinrval.h
+ prio.h
+ pripcsem.h
+ private
++private/android_filesystem_config.h
+ prlink.h
+ prlock.h
+ prlog.h
+@@ -138,6 +151,7 @@ ssl.h
+ sslerr.h
+ sslproto.h
+ sslt.h
++ui/egl/android_natives.h
+ utilmodt.h
+ utilpars.h
+ utilparst.h
+diff --git a/dom/plugins/base/moz.build b/dom/plugins/base/moz.build
+index 88c3d9115f..a7c68b1dd6 100644
+--- a/dom/plugins/base/moz.build
++++ b/dom/plugins/base/moz.build
+@@ -3,6 +3,8 @@
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
++
++
+ XPIDL_SOURCES += [
+     'nsIPluginTag.idl',
+ ]
+@@ -106,6 +108,11 @@ LOCAL_INCLUDES += [
+     '/xpcom/base',
+ ]
+ 
++if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    LOCAL_INCLUDES += [
++        '/dom/plugins/base/android',
++    ]
++
+ if CONFIG['OS_ARCH'] == 'WINNT':
+     LOCAL_INCLUDES += [
+         '/xpcom/base',
+diff --git a/dom/plugins/ipc/PluginInstanceChild.cpp b/dom/plugins/ipc/PluginInstanceChild.cpp
+index 6b7f5b0339..46be1092d5 100644
+--- a/dom/plugins/ipc/PluginInstanceChild.cpp
++++ b/dom/plugins/ipc/PluginInstanceChild.cpp
+@@ -717,8 +717,8 @@ PluginInstanceChild::NPN_SetValue(NPPVariable aVar, void* aValue)
+       // on the chrome process.  This is because our audio
+       // API calls should run the chrome proc, not content.
+       NPError rv = NPERR_GENERIC_ERROR;
+-      PluginModuleChild* chromeInstance = PluginModuleChild::GetChrome();
+-      if (chromeInstance) {
++      PluginModuleChild* chromeInstance = PluginModuleChild::GetChrome();
++      if (chromeInstance) {
+         rv = chromeInstance->PluginRequiresAudioDeviceChanges(this,
+                                               (NPBool)(intptr_t)aValue);
+       }
+@@ -1449,6 +1449,10 @@ PluginInstanceChild::AnswerNPP_SetWindow(const NPRemoteWindow& aWindow)
+ 
+     if (mPluginIface->setwindow)
+         (void) mPluginIface->setwindow(&mData, &mWindow);
++#elif defined(ANDROID)
++    // TODO: Need Android impl
++#elif defined(MOZ_WIDGET_UIKIT)
++    // Don't care
+ #else
+ #  error Implement me for your OS
+ #endif
+diff --git a/dom/plugins/ipc/PluginInstanceParent.cpp b/dom/plugins/ipc/PluginInstanceParent.cpp
+index ee9b4e7ae9..db5188ff97 100644
+--- a/dom/plugins/ipc/PluginInstanceParent.cpp
++++ b/dom/plugins/ipc/PluginInstanceParent.cpp
+@@ -267,7 +267,7 @@ PluginInstanceParent::AnswerNPN_GetValue_NPNVnetscapeWindow(NativeWindowHandle*
+     HWND id;
+ #elif defined(MOZ_X11)
+     XID id;
+-#elif defined(XP_DARWIN)
++#elif defined(XP_DARWIN) || defined(ANDROID)
+     intptr_t id;
+ #else
+ #warning Implement me
+diff --git a/dom/plugins/ipc/PluginMessageUtils.h b/dom/plugins/ipc/PluginMessageUtils.h
+index cb9dbaad51..d8538549cf 100644
+--- a/dom/plugins/ipc/PluginMessageUtils.h
++++ b/dom/plugins/ipc/PluginMessageUtils.h
+@@ -115,7 +115,7 @@ struct NPAudioDeviceChangeDetailsIPC
+ typedef HWND NativeWindowHandle;
+ #elif defined(MOZ_X11)
+ typedef XID NativeWindowHandle;
+-#elif defined(XP_DARWIN)
++#elif defined(XP_DARWIN) || defined(ANDROID)
+ typedef intptr_t NativeWindowHandle; // never actually used, will always be 0
+ #else
+ #error Need NativeWindowHandle for this platform
+diff --git a/gfx/cairo/cairo/src/moz.build b/gfx/cairo/cairo/src/moz.build
+index 34587ade8d..5d712abce2 100644
+--- a/gfx/cairo/cairo/src/moz.build
++++ b/gfx/cairo/cairo/src/moz.build
+@@ -16,7 +16,7 @@ EXPORTS.cairo += [
+     'pixman-rename.h',
+ ]
+ 
+-if CONFIG['MOZ_WIDGET_TOOLKIT'] not in ('cocoa', 'uikit'):
++if CONFIG['MOZ_WIDGET_TOOLKIT'] not in ('cocoa', 'uikit', 'android'):
+     EXPORTS.cairo += [
+         'cairo-pdf.h',
+     ]
+diff --git a/gfx/skia/moz.build b/gfx/skia/moz.build
+index a41723b382..8020a60d12 100644
+--- a/gfx/skia/moz.build
++++ b/gfx/skia/moz.build
+@@ -516,6 +516,18 @@ if CONFIG['MOZ_ENABLE_SKIA_GPU']:
+         'skia/src/gpu/GrResourceCache.cpp',
+         'skia/src/image/SkImage_Gpu.cpp',
+     ]
++if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android'):
++    UNIFIED_SOURCES += [
++        'skia/src/ports/SkDebug_android.cpp',
++        'skia/src/ports/SkOSFile_posix.cpp',
++        'skia/src/ports/SkOSLibrary_posix.cpp',
++        'skia/src/ports/SkTLS_pthread.cpp',
++        'skia/src/utils/SkThreadUtils_pthread.cpp',
++    ]
++    SOURCES += [
++        'skia/src/ports/SkFontHost_cairo.cpp',
++        'skia/src/ports/SkFontHost_FreeType_common.cpp',
++    ]
+ if CONFIG['MOZ_WIDGET_TOOLKIT'] in {'cocoa', 'uikit'}:
+     UNIFIED_SOURCES += [
+         'skia/src/ports/SkDebug_stdio.cpp',
+@@ -738,7 +750,7 @@ if CONFIG['CLANG_CXX'] or CONFIG['CLANG_CL']:
+         '-Wno-unused-private-field',
+     ]
+ 
+-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk2', 'gtk3'):
++if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk2', 'gtk3', 'android'):
+     CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
+     CXXFLAGS += CONFIG['CAIRO_FT_CFLAGS']
+ 
+diff --git a/gfx/thebes/gfxPlatform.h b/gfx/thebes/gfxPlatform.h
+index 67d8f28fd5..f867185c84 100644
+--- a/gfx/thebes/gfxPlatform.h
++++ b/gfx/thebes/gfxPlatform.h
+@@ -699,7 +699,7 @@ protected:
+     virtual already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource();
+ 
+     // Returns whether or not layers should be accelerated by default on this platform.
+-    bool AccelerateLayersByDefault();
++    virtual bool AccelerateLayersByDefault();
+ 
+     // Returns a prioritized list of available compositor backends for acceleration.
+     virtual void GetAcceleratedCompositorBackends(nsTArray<mozilla::layers::LayersBackend>& aBackends);
+diff --git a/gfx/thebes/moz.build b/gfx/thebes/moz.build
+index 036df875cf..fe3940e1c3 100644
+--- a/gfx/thebes/moz.build
++++ b/gfx/thebes/moz.build
+@@ -74,6 +74,20 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
+         'gfxQuartzSurface.cpp',
+         'PrintTargetCG.cpp',
+     ]
++elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    EXPORTS += [
++        'gfxAndroidPlatform.h',
++        'gfxFT2FontBase.h',
++        'gfxFT2Fonts.h',
++    ]
++    SOURCES += [
++        'gfxAndroidPlatform.cpp',
++        'gfxFT2FontBase.cpp',
++        'gfxFT2FontList.cpp',
++        'gfxFT2Fonts.cpp',
++        'gfxFT2Utils.cpp',
++    ]
++    CXXFLAGS += CONFIG['CAIRO_FT_CFLAGS']
+ elif 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
+     EXPORTS += [
+         'gfxFT2FontBase.h',
+diff --git a/hal/moz.build b/hal/moz.build
+index 194a8fd93e..798e010e2f 100644
+--- a/hal/moz.build
++++ b/hal/moz.build
+@@ -89,9 +89,10 @@ UNIFIED_SOURCES += [
+     'fallback/FallbackWakeLocks.cpp',
+ ]
+ 
+-UNIFIED_SOURCES += [
+-    'fallback/FallbackNetwork.cpp',
+-]
++if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'android':
++    UNIFIED_SOURCES += [
++        'fallback/FallbackNetwork.cpp',
++    ]
+ 
+ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
+     UNIFIED_SOURCES += [
+diff --git a/ipc/chromium/moz.build b/ipc/chromium/moz.build
+index 51f9d5cf3a..6dbdfd7753 100644
+--- a/ipc/chromium/moz.build
++++ b/ipc/chromium/moz.build
+@@ -123,6 +123,12 @@ if os_linux:
+         'src/base/process_util_linux.cc',
+         'src/base/time_posix.cc',
+     ]
++    if CONFIG['OS_TARGET'] == 'Android':
++        UNIFIED_SOURCES += [
++            'src/base/message_pump_android.cc',
++        ]
++        DEFINES['ANDROID'] = True
++        DEFINES['_POSIX_MONOTONIC_CLOCK'] = 0
+ 
+ if os_bsd or os_linux or os_solaris:
+     if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
+diff --git a/ipc/chromium/src/base/lock_impl_posix.cc b/ipc/chromium/src/base/lock_impl_posix.cc
+index 05e5269e09..b6bf19777e 100644
+--- a/ipc/chromium/src/base/lock_impl_posix.cc
++++ b/ipc/chromium/src/base/lock_impl_posix.cc
+@@ -20,7 +20,7 @@ LockImpl::LockImpl() {
+   int rv = pthread_mutexattr_init(&mta);
+ 
+   DCHECK_EQ(rv, 0) << ". " << strerror(rv);
+-#if PRIORITY_INHERITANCE_LOCKS_POSSIBLE()
++#if PRIORITY_INHERITANCE_LOCKS_POSSIBLE() && !defined(ANDROID)
+   if (PriorityInheritanceAvailable()) {
+     rv = pthread_mutexattr_setprotocol(&mta, PTHREAD_PRIO_INHERIT);
+     DCHECK_EQ(rv, 0) << ". " << strerror(rv);
+diff --git a/ipc/chromium/src/base/message_loop.cc b/ipc/chromium/src/base/message_loop.cc
+index 69493dccb1..61204cd9bc 100644
+--- a/ipc/chromium/src/base/message_loop.cc
++++ b/ipc/chromium/src/base/message_loop.cc
+@@ -25,6 +25,9 @@
+ #include "base/message_pump_glib.h"
+ #endif
+ #endif
++#ifdef ANDROID
++#include "base/message_pump_android.h"
++#endif
+ #ifdef MOZ_TASK_TRACER
+ #include "GeckoTaskTracer.h"
+ #include "TracedTaskCommon.h"
+diff --git a/ipc/chromium/src/base/process_util_linux.cc b/ipc/chromium/src/base/process_util_linux.cc
+index 2f0dac21f8..428f59705b 100644
+--- a/ipc/chromium/src/base/process_util_linux.cc
++++ b/ipc/chromium/src/base/process_util_linux.cc
+@@ -117,7 +117,7 @@ public:
+     }
+   }
+ private:
+-  std::auto_ptr<EnvironmentEnvp> mEnvp;
++  std::unique_ptr<EnvironmentEnvp> mEnvp;
+ };
+ 
+ bool LaunchApp(const std::vector<std::string>& argv,
+diff --git a/ipc/chromium/src/base/shared_memory_posix.cc b/ipc/chromium/src/base/shared_memory_posix.cc
+index 5aa061fee6..742d1a3832 100644
+--- a/ipc/chromium/src/base/shared_memory_posix.cc
++++ b/ipc/chromium/src/base/shared_memory_posix.cc
+@@ -269,6 +269,39 @@ void SharedMemory::Close(bool unmap_view) {
+   }
+ }
+ 
++#ifdef ANDROID
++void SharedMemory::LockOrUnlockCommon(int function) {
++  DCHECK(mapped_file_ >= 0);
++  struct flock lockreq;
++  lockreq.l_type = function;
++  lockreq.l_whence = SEEK_SET;
++  lockreq.l_start = 0;
++  lockreq.l_len = 0;
++  while (fcntl(mapped_file_, F_SETLKW, &lockreq) < 0) {
++    if (errno == EINTR) {
++      continue;
++    } else if (errno == ENOLCK) {
++      // temporary kernel resource exaustion
++      PlatformThread::Sleep(500);
++      continue;
++    } else {
++      NOTREACHED() << "lockf() failed."
++                   << " function:" << function
++                   << " fd:" << mapped_file_
++                   << " errno:" << errno
++                   << " msg:" << strerror(errno);
++    }
++  }
++}
++
++void SharedMemory::Lock() {
++  LockOrUnlockCommon(F_WRLCK);
++}
++
++void SharedMemory::Unlock() {
++  LockOrUnlockCommon(F_UNLCK);
++}
++#else
+ void SharedMemory::LockOrUnlockCommon(int function) {
+   DCHECK(mapped_file_ >= 0);
+   while (lockf(mapped_file_, function, 0) < 0) {
+@@ -295,6 +328,7 @@ void SharedMemory::Lock() {
+ void SharedMemory::Unlock() {
+   LockOrUnlockCommon(F_ULOCK);
+ }
++#endif
+ 
+ SharedMemoryHandle SharedMemory::handle() const {
+   return FileDescriptor(mapped_file_, false);
+diff --git a/media/libtremor/lib/misc.h b/media/libtremor/lib/misc.h
+index 1ae4d2e813..2fc521a244 100644
+--- a/media/libtremor/lib/misc.h
++++ b/media/libtremor/lib/misc.h
+@@ -49,9 +49,7 @@ union magic {
+   } halves;
+   ogg_int64_t whole;
+ };
+-#endif 
+-
+-#if BYTE_ORDER==BIG_ENDIAN
++#elif BYTE_ORDER==BIG_ENDIAN
+ union magic {
+   struct {
+     ogg_int32_t hi;
+diff --git a/memory/mozjemalloc/jemalloc.c b/memory/mozjemalloc/jemalloc.c
+index a7aecc54a1..987faf935a 100644
+--- a/memory/mozjemalloc/jemalloc.c
++++ b/memory/mozjemalloc/jemalloc.c
+@@ -168,7 +168,7 @@
+ #  define MALLOC_SYSV
+ #endif
+ 
+-#ifdef MOZ_MEMORY_LINUX
++#if defined(MOZ_MEMORY_LINUX) && !defined(MOZ_MEMORY_ANDROID)
+ #define	_GNU_SOURCE /* For mremap(2). */
+ #endif
+ 
+@@ -494,7 +494,7 @@ static volatile bool malloc_initialized = false;
+ /* No init lock for Windows nor FreeBSD. */
+ #elif defined(MOZ_MEMORY_DARWIN)
+ static malloc_mutex_t init_lock = {OS_SPINLOCK_INIT};
+-#elif defined(MOZ_MEMORY_LINUX)
++#elif defined(MOZ_MEMORY_LINUX) && !defined(MOZ_MEMORY_ANDROID)
+ static malloc_mutex_t init_lock = PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP;
+ #else
+ static malloc_mutex_t init_lock = PTHREAD_MUTEX_INITIALIZER;
+@@ -1400,7 +1400,7 @@ malloc_mutex_init(malloc_mutex_t *mutex)
+     InitializeSRWLock(mutex);
+ #elif defined(MOZ_MEMORY_DARWIN)
+ 	mutex->lock = OS_SPINLOCK_INIT;
+-#elif defined(MOZ_MEMORY_LINUX)
++#elif defined(MOZ_MEMORY_LINUX) && !defined(MOZ_MEMORY_ANDROID)
+ 	pthread_mutexattr_t attr;
+ 	if (pthread_mutexattr_init(&attr) != 0)
+ 		return (true);
+@@ -1466,7 +1466,7 @@ malloc_spin_init(malloc_spinlock_t *lock)
+ 	InitializeSRWLock(lock);
+ #elif defined(MOZ_MEMORY_DARWIN)
+ 	lock->lock = OS_SPINLOCK_INIT;
+-#elif defined(MOZ_MEMORY_LINUX)
++#elif defined(MOZ_MEMORY_LINUX) && !defined(MOZ_MEMORY_ANDROID)
+ 	pthread_mutexattr_t attr;
+ 	if (pthread_mutexattr_init(&attr) != 0)
+ 		return (true);
+diff --git a/mozglue/build/moz.build b/mozglue/build/moz.build
+index c6b6518119..7a3f9eb907 100644
+--- a/mozglue/build/moz.build
++++ b/mozglue/build/moz.build
+@@ -3,15 +3,20 @@
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+-# Build mozglue as a shared lib on Windows, OSX.
++# Build mozglue as a shared lib on Windows, OSX and Android.
+ # If this is ever changed, update MOZ_SHARED_MOZGLUE in browser/installer/Makefile.in
+-if CONFIG['OS_TARGET'] in ('WINNT', 'Darwin'):
++if CONFIG['OS_TARGET'] in ('WINNT', 'Darwin', 'Android'):
+     SharedLibrary('mozglue')
+ else:
+     Library('mozglue')
+ 
+ SDK_LIBRARY = True
+ 
++if CONFIG['OS_TARGET'] == 'Android':
++    SOURCES += [
++        'BionicGlue.cpp',
++    ]
++
+ if CONFIG['MOZ_ASAN']:
+     SOURCES += ['AsanOptions.cpp']
+ 
+diff --git a/mozglue/linker/Elfxx.h b/mozglue/linker/Elfxx.h
+index 33aa14ca40..82a4d31c63 100644
+--- a/mozglue/linker/Elfxx.h
++++ b/mozglue/linker/Elfxx.h
+@@ -77,6 +77,31 @@
+ #define STR_RELOC(n) "DT_RELA" # n
+ #define Reloc Rela
+ 
++#elif defined(__aarch64__)
++#define ELFMACHINE EM_AARCH64
++
++#ifndef R_AARCH64_ABS64
++#define R_AARCH64_ABS64 257
++#endif
++#ifndef R_AARCH64_GLOB_DAT
++#define R_AARCH64_GLOB_DAT 1025
++#endif
++#ifndef R_AARCH64_JUMP_SLOT
++#define R_AARCH64_JUMP_SLOT 1026
++#endif
++#ifndef R_AARCH64_RELATIVE
++#define R_AARCH64_RELATIVE 1027
++#endif
++
++#define R_ABS R_AARCH64_ABS64
++#define R_GLOB_DAT R_AARCH64_GLOB_DAT
++#define R_JMP_SLOT R_AARCH64_JUMP_SLOT
++#define R_RELATIVE R_AARCH64_RELATIVE
++#define RELOC(n) DT_RELA ## n
++#define UNSUPPORTED_RELOC(n) DT_REL ## n
++#define STR_RELOC(n) "DT_RELA" # n
++#define Reloc Rela
++
+ #elif defined(__arm__)
+ #define ELFMACHINE EM_ARM
+ 
+diff --git a/mozglue/linker/Logging.h b/mozglue/linker/Logging.h
+index ec0a2b32b4..046d918f4a 100644
+--- a/mozglue/linker/Logging.h
++++ b/mozglue/linker/Logging.h
+@@ -7,6 +7,41 @@
+ 
+ #include "mozilla/Likely.h"
+ 
++#ifdef ANDROID
++#include <android/log.h>
++#define LOG(...) __android_log_print(ANDROID_LOG_INFO, "GeckoLinker", __VA_ARGS__)
++#define WARN(...) __android_log_print(ANDROID_LOG_WARN, "GeckoLinker", __VA_ARGS__)
++#define ERROR(...) __android_log_print(ANDROID_LOG_ERROR, "GeckoLinker", __VA_ARGS__)
++#else
++#include <cstdio>
++
++/* Expand to 1 or m depending on whether there is one argument or more
++ * given. */
++#define MOZ_ONE_OR_MORE_ARGS_IMPL2(_1, _2, _3, _4, _5, _6, _7, _8, _9, N, ...) \
++  N
++#define MOZ_ONE_OR_MORE_ARGS_IMPL(args) MOZ_ONE_OR_MORE_ARGS_IMPL2 args
++#define MOZ_ONE_OR_MORE_ARGS(...) \
++  MOZ_ONE_OR_MORE_ARGS_IMPL((__VA_ARGS__, m, m, m, m, m, m, m, m, 1, 0))
++
++#define MOZ_MACRO_GLUE(a, b) a b
++#define MOZ_CONCAT2(a, b) a ## b
++#define MOZ_CONCAT1(a, b) MOZ_CONCAT2(a, b)
++#define MOZ_CONCAT(a, b) MOZ_CONCAT1(a, b)
++
++/* Some magic to choose between LOG1 and LOGm depending on the number of
++ * arguments */
++#define MOZ_CHOOSE_LOG(...) \
++  MOZ_MACRO_GLUE(MOZ_CONCAT(LOG, MOZ_ONE_OR_MORE_ARGS(__VA_ARGS__)), \
++                 (__VA_ARGS__))
++
++#define LOG1(format) fprintf(stderr, format "\n")
++#define LOGm(format, ...) fprintf(stderr, format "\n", __VA_ARGS__)
++#define LOG(...) MOZ_CHOOSE_LOG(__VA_ARGS__)
++#define WARN(...) MOZ_CHOOSE_LOG("Warning: " __VA_ARGS__)
++#define ERROR(...) MOZ_CHOOSE_LOG("Error: " __VA_ARGS__)
++
++#endif
++
+ class Logging
+ {
+ public:
+diff --git a/mozglue/linker/XZStream.cpp b/mozglue/linker/XZStream.cpp
+index 7ddbd875ac..66b4b44da0 100644
+--- a/mozglue/linker/XZStream.cpp
++++ b/mozglue/linker/XZStream.cpp
+@@ -18,7 +18,7 @@ ParseVarLenInt(const uint8_t* aBuf, size_t aBufSize, uint64_t* aValue)
+   if (!aBufSize) {
+     return 0;
+   }
+-  aBufSize = std::min(9u, aBufSize);
++  aBufSize = std::min<size_t>(9, aBufSize);
+ 
+   *aValue = aBuf[0] & 0x7F;
+   size_t i = 0;
+diff --git a/netwerk/build/moz.build b/netwerk/build/moz.build
+index ebafda48bb..0bde117bf3 100644
+--- a/netwerk/build/moz.build
++++ b/netwerk/build/moz.build
+@@ -41,6 +41,11 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
+         '/netwerk/system/mac',
+     ]
+ 
++if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    LOCAL_INCLUDES += [
++        '/netwerk/system/android',
++    ]
++
+ elif CONFIG['OS_ARCH'] == 'Linux':
+     LOCAL_INCLUDES += [
+         '/netwerk/system/linux',
+diff --git a/netwerk/build/nsNetModule.cpp b/netwerk/build/nsNetModule.cpp
+index 3f4591218f..7f4a370403 100644
+--- a/netwerk/build/nsNetModule.cpp
++++ b/netwerk/build/nsNetModule.cpp
+@@ -417,6 +417,9 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNotifyAddrListener, Init)
+ #elif defined(MOZ_WIDGET_COCOA)
+ #include "nsNetworkLinkService.h"
+ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNetworkLinkService, Init)
++#elif defined(MOZ_WIDGET_ANDROID)
++#include "nsAndroidNetworkLinkService.h"
++NS_GENERIC_FACTORY_CONSTRUCTOR(nsAndroidNetworkLinkService)
+ #elif defined(XP_LINUX)
+ #include "nsNotifyAddrListener_Linux.h"
+ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNotifyAddrListener, Init)
+@@ -848,6 +851,8 @@ NS_DEFINE_NAMED_CID(NS_RTSPPROTOCOLHANDLER_CID);
+ NS_DEFINE_NAMED_CID(NS_NETWORK_LINK_SERVICE_CID);
+ #elif defined(MOZ_WIDGET_COCOA)
+ NS_DEFINE_NAMED_CID(NS_NETWORK_LINK_SERVICE_CID);
++#elif defined(MOZ_WIDGET_ANDROID)
++NS_DEFINE_NAMED_CID(NS_NETWORK_LINK_SERVICE_CID);
+ #elif defined(XP_LINUX)
+ NS_DEFINE_NAMED_CID(NS_NETWORK_LINK_SERVICE_CID);
+ #endif
+@@ -997,6 +1002,8 @@ static const mozilla::Module::CIDEntry kNeckoCIDs[] = {
+     { &kNS_NETWORK_LINK_SERVICE_CID, false, nullptr, nsNotifyAddrListenerConstructor },
+ #elif defined(MOZ_WIDGET_COCOA)
+     { &kNS_NETWORK_LINK_SERVICE_CID, false, nullptr, nsNetworkLinkServiceConstructor },
++#elif defined(MOZ_WIDGET_ANDROID)
++    { &kNS_NETWORK_LINK_SERVICE_CID, false, nullptr, nsAndroidNetworkLinkServiceConstructor },
+ #elif defined(XP_LINUX)
+     { &kNS_NETWORK_LINK_SERVICE_CID, false, nullptr, nsNotifyAddrListenerConstructor },
+ #endif
+@@ -1150,6 +1157,8 @@ static const mozilla::Module::ContractIDEntry kNeckoContracts[] = {
+     { NS_NETWORK_LINK_SERVICE_CONTRACTID, &kNS_NETWORK_LINK_SERVICE_CID },
+ #elif defined(MOZ_WIDGET_COCOA)
+     { NS_NETWORK_LINK_SERVICE_CONTRACTID, &kNS_NETWORK_LINK_SERVICE_CID },
++#elif defined(MOZ_WIDGET_ANDROID)
++    { NS_NETWORK_LINK_SERVICE_CONTRACTID, &kNS_NETWORK_LINK_SERVICE_CID },
+ #elif defined(XP_LINUX)
+     { NS_NETWORK_LINK_SERVICE_CONTRACTID, &kNS_NETWORK_LINK_SERVICE_CID },
+ #endif
+diff --git a/netwerk/system/moz.build b/netwerk/system/moz.build
+index dcf7d6c3f1..4b0babba2e 100644
+--- a/netwerk/system/moz.build
++++ b/netwerk/system/moz.build
+@@ -7,5 +7,7 @@ if CONFIG['OS_ARCH'] == 'WINNT':
+     DIRS += ['win32']
+ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
+     DIRS += ['mac']
++elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    DIRS += ['android']
+ elif CONFIG['OS_ARCH'] == 'Linux':
+     DIRS += ['linux']
+diff --git a/old-configure.in b/old-configure.in
+index 4191d131c7..601d516a0a 100644
+--- a/old-configure.in
++++ b/old-configure.in
+@@ -2238,8 +2238,9 @@ dnl ========================================================
+ 
+ case "$MOZ_BUILD_APP" in
+ mobile/android)
+-    dnl target SDK 34; newest installed build-tools; no legacy support AARs
+-    MOZ_ANDROID_SDK(34)
++    dnl target SDK 34; newest installed build-tools; legacy support AARs vendored
++    dnl under $SDK/extras/android/m2repository (com.android.support 23.4.0).
++    MOZ_ANDROID_SDK(34, , yes)
+     ;;
+ esac
+ 
+@@ -4181,7 +4182,11 @@ MOZ_ARG_WITH_STRING(chrome-name,
+ 
+ # Default Omni Jar Name
+ if test -z "$OMNIJAR_NAME" ; then
+-    OMNIJAR_NAME=omni.ja
++    if test "$MOZ_BUILD_APP" = "mobile/android" ; then
++        OMNIJAR_NAME=assets/omni.ja
++    else
++        OMNIJAR_NAME=omni.ja
++    fi
+ fi
+ 
+ MOZ_PACKAGER_FORMAT="$MOZ_CHROME_FILE_FORMAT"
+@@ -4512,6 +4517,13 @@ if test "$USE_FC_FREETYPE"; then
+     ])
+ fi
+ 
++if test -n "$MOZ_TREE_FREETYPE"; then
++   MOZ_ENABLE_CAIRO_FT=1
++   FT_FONT_FEATURE="#define CAIRO_HAS_FT_FONT 1"
++   CAIRO_FT_CFLAGS="-I$_topsrcdir/modules/freetype2/include"
++   AC_SUBST_LIST(CAIRO_FT_CFLAGS)
++fi
++
+ dnl ========================================================
+ dnl Check for pixman and cairo
+ dnl ========================================================
+@@ -5249,6 +5261,36 @@ AC_SUBST(NSS_DISABLE_LIBPKIX)
+ 
+ MOZ_CREATE_CONFIG_STATUS()
+ 
++# Run freetype configure script
++
++if test "$MOZ_TREE_FREETYPE"; then
++   export CFLAGS="$CFLAGS $MOZ_DEBUG_FLAGS -std=c99"
++   export CPPFLAGS="$CPPFLAGS $MOZ_DEBUG_FLAGS"
++   export CXXFLAGS="$CXXFLAGS $MOZ_DEBUG_FLAGS"
++   export LDFLAGS="$LDFLAGS $MOZ_DEBUG_LDFLAGS"
++   # Spaces in the *_CFLAGS and *_LIBS variables are intentionally placed
++   # to force freetype to use our settings rather than autodetecting
++   if test -n "$MOZ_SYSTEM_PNG"; then
++     export LIBPNG_CFLAGS="$MOZ_PNG_CFLAGS "
++   else
++     export LIBPNG_CFLAGS="-I$_objdir/dist/include"
++   fi
++   export LIBPNG_LIBS="$MOZ_PNG_LIBS "
++   export ZLIB_CFLAGS="$MOZ_ZLIB_CFLAGS "
++   export ZLIB_LIBS="$MOZ_ZLIB_LIBS "
++   export CONFIG_FILES="unix-cc.mk:unix-cc.in unix-def.mk:unix-def.in freetype-config freetype2.pc:freetype2.in"
++   ac_configure_args="$ac_configure_args --host=$target --disable-shared --with-pic=yes --with-zlib=yes --without-bzip2 --with-png=yes --without-harfbuzz"
++
++   if ! test -e modules; then
++     mkdir modules
++   fi
++   # Only export CC, CXX and RANLIB for the subconfigure, and avoid spilling
++   # that further down the road.
++   (export CC CXX RANLIB;
++    AC_OUTPUT_SUBDIRS(modules/freetype2)
++   ) || exit 1
++fi
++
+ if test -z "$direct_nspr_config"; then
+     dnl ========================================================
+     dnl = Setup a nice relatively clean build environment for
+diff --git a/python/mozbuild/mozbuild/action/generate_browsersearch.py b/python/mozbuild/mozbuild/action/generate_browsersearch.py
+index c343e3cc68..4e3b5b93f9 100644
+--- a/python/mozbuild/mozbuild/action/generate_browsersearch.py
++++ b/python/mozbuild/mozbuild/action/generate_browsersearch.py
+@@ -84,7 +84,7 @@ def main(args):
+     default = properties.get('browser.search.defaultenginename')
+     engines = properties.get_list('browser.search.order')
+ 
+-    writer = codecs.getwriter('utf-8')(sys.stdout)
++    writer = sys.stdout
+     if opts.verbose:
+         print('Read {len} engines: {engines}'.format(len=len(engines), engines=engines), file=writer)
+         print("Default engine is '{default}'.".format(default=default), file=writer)
+@@ -97,7 +97,7 @@ def main(args):
+     regions = properties.get_dict('browser.search.defaultenginename')
+ 
+     browsersearch['regions'] = {}
+-    for region in list(regions.keys()):
++    for region in regions.keys():
+         region_default = regions[region]
+         region_engines = properties.get_list('browser.search.order.{region}'.format(region=region))
+ 
+@@ -115,7 +115,7 @@ def main(args):
+     # FileAvoidWrite creates its parent directories.
+     output = os.path.abspath(opts.output)
+     fh = FileAvoidWrite(output)
+-    json.dump(browsersearch, fh)
++    fh.write(json.dumps(browsersearch).encode('utf-8'))
+     existed, updated = fh.close()
+ 
+     if not opts.silent:
+diff --git a/python/mozbuild/mozbuild/backend/recursivemake.py b/python/mozbuild/mozbuild/backend/recursivemake.py
+index edee3af28b..483679d51b 100644
+--- a/python/mozbuild/mozbuild/backend/recursivemake.py
++++ b/python/mozbuild/mozbuild/backend/recursivemake.py
+@@ -819,11 +819,9 @@ class RecursiveMakeBackend(CommonBackend):
+                     # moz.build-only list
+                     self._check_blacklisted_variables(makefile_in, content)
+ 
+-        # Normalize traversal ordering for deterministic backend output
+-        for node, subdirs in self._traversal._traversal.items():
+-            subdirs.dirs[:] = sorted(subdirs.dirs)
+-            subdirs.tests[:] = sorted(subdirs.tests)
+-
++        # Normalize traversal ordering for deterministic backend output.
++        # Note: subdirs keep moz.build DIRS declaration order — build
++        # ordering within sequential tiers (libs/tools) depends on it.
+         # Sort traversal keys deterministically
+         self._traversal._traversal = {
+             k: self._traversal._traversal[k]
+diff --git a/python/mozbuild/mozbuild/frontend/emitter.py b/python/mozbuild/mozbuild/frontend/emitter.py
+index 9a723206a8..177f89a039 100644
+--- a/python/mozbuild/mozbuild/frontend/emitter.py
++++ b/python/mozbuild/mozbuild/frontend/emitter.py
+@@ -1017,6 +1017,24 @@ class TreeMetadataEmitter(LoggingMixin):
+             passthru.variables['ASFLAGS'] = context.config.substs.get('NASM_ASFLAGS')
+             passthru.variables['AS_DASH_C_FLAG'] = ''
+ 
++        for (symbol, cls) in [
++                ('ANDROID_RES_DIRS', AndroidResDirs),
++                ('ANDROID_EXTRA_RES_DIRS', AndroidExtraResDirs),
++                ('ANDROID_ASSETS_DIRS', AndroidAssetsDirs)]:
++            paths = context.get(symbol)
++            if not paths:
++                continue
++            for p in paths:
++                if isinstance(p, SourcePath) and not os.path.isdir(p.full_path):
++                    raise SandboxValidationError('Directory listed in '
++                        '%s is not a directory: \'%s\'' %
++                            (symbol, p.full_path), context)
++            yield cls(context, paths)
++
++        android_extra_packages = context.get('ANDROID_EXTRA_PACKAGES')
++        if android_extra_packages:
++            yield AndroidExtraPackages(context, android_extra_packages)
++
+         if passthru.variables:
+             yield passthru
+ 
+diff --git a/python/mozbuild/mozpack/files.py b/python/mozbuild/mozpack/files.py
+index 989df5441c..22fa2eca6b 100644
+--- a/python/mozbuild/mozpack/files.py
++++ b/python/mozbuild/mozpack/files.py
+@@ -679,8 +679,8 @@ class MinifiedProperties(BaseFile):
+         Return a file-like object allowing to read() the minified content of
+         the properties file.
+         '''
+-        return BytesIO(''.join(l for l in self._file.open().readlines()
+-                               if not l.startswith('#')))
++        return BytesIO(b''.join(l for l in self._file.open().readlines()
++                                if not l.startswith(b'#')))
+ 
+ 
+ class MinifiedJavaScript(BaseFile):
+diff --git a/security/moz.build b/security/moz.build
+index 191080e27b..5887bf2ef2 100644
+--- a/security/moz.build
++++ b/security/moz.build
+@@ -80,6 +80,8 @@ gyp_vars['NSS_DISABLE_AVX2'] = 1
+ if CONFIG['CLANG_CXX']:
+     gyp_vars['cc_is_clang'] = 1
+ gyp_vars['disable_crypto_vsx'] = 1
++if CONFIG['OS_TARGET'] == 'Android':
++    gyp_vars['OS'] = 'android'
+ 
+ GYP_DIRS += ['nss']
+ GYP_DIRS['nss'].input = 'nss/nss.gyp'
+diff --git a/security/nss/coreconf/Linux.mk b/security/nss/coreconf/Linux.mk
+index dcb432415f..101f9cae8b 100644
+--- a/security/nss/coreconf/Linux.mk
++++ b/security/nss/coreconf/Linux.mk
+@@ -144,6 +144,8 @@ OS_LIBS			= $(OS_PTHREAD) -ldl -lc
+ 
+ ifeq ($(OS_TARGET),Android)
+ 	OS_LIBS		+= -llog
++	# Bionic has no separate libpthread; pthreads live in libc.
++	OS_PTHREAD	=
+ endif
+ 
+ ifdef USE_PTHREADS
+diff --git a/toolkit/library/moz.build b/toolkit/library/moz.build
+index e32a1258bb..fc48e98190 100644
+--- a/toolkit/library/moz.build
++++ b/toolkit/library/moz.build
+@@ -104,6 +104,7 @@ USE_LIBS += [
+ USE_LIBS += [
+     'gkmedias',
+     'lgpllibs',
++    'memory',
+     'nspr',
+     'nss',
+     'psshparser',
+@@ -121,6 +122,12 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gtk3' and CONFIG['MOZ_ENABLE_NPAPI']:
+         'mozgtk_stub',
+     ]
+ 
++if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT'] or \
++        CONFIG['MOZ_TREE_FREETYPE']:
++    USE_LIBS += [
++        'freetype',
++    ]
++
+ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gtk3' and not CONFIG['MOZ_ENABLE_NPAPI']:
+     OS_LIBS += CONFIG['MOZ_GTK3_LIBS']
+ 
+@@ -177,7 +184,7 @@ if CONFIG['OS_ARCH'] == 'WINNT':
+         'winspool',
+     ]
+ 
+-if CONFIG['OS_ARCH'] == 'Linux':
++if CONFIG['OS_ARCH'] == 'Linux' and CONFIG['OS_TARGET'] != 'Android':
+     OS_LIBS += [
+         'rt',
+     ]
+diff --git a/toolkit/moz.configure b/toolkit/moz.configure
+index 8dd507dcbb..dc86ef665f 100644
+--- a/toolkit/moz.configure
++++ b/toolkit/moz.configure
+@@ -87,6 +87,22 @@ def toolkit(toolkit):
+ set_config('MOZ_WIDGET_TOOLKIT', toolkit)
+ add_old_configure_assignment('MOZ_WIDGET_TOOLKIT', toolkit)
+ 
++# Build Freetype in the tree
++# ==============================================================
++@depends(target)
++def tree_freetype(target):
++    if target.os == 'Android':
++        return True
++
++set_define('MOZ_TREE_FREETYPE', tree_freetype)
++set_config('MOZ_TREE_FREETYPE', tree_freetype)
++add_old_configure_assignment('MOZ_TREE_FREETYPE', tree_freetype)
++
++set_define('HAVE_FT_BITMAP_SIZE_Y_PPEM', tree_freetype)
++set_define('HAVE_FT_GLYPHSLOT_EMBOLDEN', tree_freetype)
++set_define('HAVE_FT_LOAD_SFNT_TABLE', tree_freetype)
++
++
+ @depends(toolkit)
+ def toolkit_gtk(toolkit):
+     if toolkit == 'gtk2':
+diff --git a/toolkit/mozapps/installer/upload-files.mk b/toolkit/mozapps/installer/upload-files.mk
+index 3f0d1f7061..5633e91712 100644
+--- a/toolkit/mozapps/installer/upload-files.mk
++++ b/toolkit/mozapps/installer/upload-files.mk
+@@ -15,7 +15,11 @@ else
+    ifeq (,$(filter-out gtk2 gtk3 qt, $(MOZ_WIDGET_TOOLKIT)))
+       MOZ_PKG_FORMAT  = BZ2
+    else
+-      MOZ_PKG_FORMAT = TGZ
++      ifeq (android,$(MOZ_WIDGET_TOOLKIT))
++          MOZ_PKG_FORMAT = APK
++      else
++          MOZ_PKG_FORMAT = TGZ
++      endif
+    endif
+ endif
+ endif
+diff --git a/toolkit/toolkit.mozbuild b/toolkit/toolkit.mozbuild
+index 55586d9a78..edb513ad59 100644
+--- a/toolkit/toolkit.mozbuild
++++ b/toolkit/toolkit.mozbuild
+@@ -20,6 +20,7 @@ DIRS += ['/modules/libmar',
+          '/other-licenses/bsdiff']
+ 
+ DIRS += [
++    '/config/external/freetype2',
+     '/xpcom',
+     '/modules/libpref',
+     '/intl',
+diff --git a/toolkit/xre/nsXREDirProvider.cpp b/toolkit/xre/nsXREDirProvider.cpp
+index e38cc4f35b..6250f1e09c 100644
+--- a/toolkit/xre/nsXREDirProvider.cpp
++++ b/toolkit/xre/nsXREDirProvider.cpp
+@@ -8,7 +8,9 @@
+ #include "nsXREDirProvider.h"
+ 
+ #include "jsapi.h"
++#include "js/ProfilingStack.h"
+ #include "xpcpublic.h"
++#include "GeckoProfiler.h"
+ 
+ #include "nsIAddonInterposition.h"
+ #include "nsIAppStartup.h"
+diff --git a/uriloader/exthandler/moz.build b/uriloader/exthandler/moz.build
+index 633c56e26d..db23a21894 100644
+--- a/uriloader/exthandler/moz.build
++++ b/uriloader/exthandler/moz.build
+@@ -23,8 +23,8 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
+     LOCAL_INCLUDES += ['win']
+ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
+     osdir = 'mac'
+-elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'uikit':
+-    osdir = 'uikit'
++elif CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'uikit'):
++    osdir = CONFIG['MOZ_WIDGET_TOOLKIT']
+ else:
+     osdir = 'unix'
+ 
+@@ -32,6 +32,12 @@ EXPORTS += [
+     osdir + '/nsOSHelperAppService.h'
+ ]
+ 
++if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    EXPORTS += [ '%s/%s' % (osdir, f) for f in [
++        'nsExternalSharingAppService.h',
++        'nsExternalURLHandlerService.h',
++    ]]
++
+ EXPORTS += [
+     'ContentHandlerService.h',
+     'nsExternalHelperAppService.h',
+@@ -78,6 +84,13 @@ if 'gtk' in CONFIG['MOZ_WIDGET_TOOLKIT']:
+         'unix/nsGNOMERegistry.cpp',
+         'unix/nsMIMEInfoUnix.cpp',
+     ]
++elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    UNIFIED_SOURCES += [
++        'android/nsAndroidHandlerApp.cpp',
++        'android/nsExternalSharingAppService.cpp',
++        'android/nsExternalURLHandlerService.cpp',
++        'android/nsMIMEInfoAndroid.cpp',
++    ]
+ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
+     UNIFIED_SOURCES += [
+         'win/nsMIMEInfoWin.cpp',
+diff --git a/widget/CompositorWidget.h b/widget/CompositorWidget.h
+index eb657ba7f3..66175fcba6 100644
+--- a/widget/CompositorWidget.h
++++ b/widget/CompositorWidget.h
+@@ -55,9 +55,12 @@ class CompositorWidgetChild;
+ class WidgetRenderingContext
+ {
+ public:
+-#ifdef XP_MACOSX
++#if defined(XP_MACOSX)
+   WidgetRenderingContext() : mLayerManager(nullptr) {}
+   layers::LayerManagerComposite* mLayerManager;
++#elif defined(MOZ_WIDGET_ANDROID)
++  WidgetRenderingContext() : mCompositor(nullptr) {}
++  layers::Compositor* mCompositor;
+ #endif
+ };
+ 
+diff --git a/widget/GfxDriverInfo.h b/widget/GfxDriverInfo.h
+index 33f5ef57c3..5b56c39198 100644
+--- a/widget/GfxDriverInfo.h
++++ b/widget/GfxDriverInfo.h
+@@ -66,7 +66,8 @@ enum class OperatingSystem {
+   OSX12_0,
+   OSX13_0,
+   OSX14_0,
+-  Ios
++  Ios,
++  Android
+ };
+ 
+ enum VersionComparisonOp {
+diff --git a/widget/nsIWidget.h b/widget/nsIWidget.h
+index 059fa85100..701ed7baec 100644
+--- a/widget/nsIWidget.h
++++ b/widget/nsIWidget.h
+@@ -136,6 +136,11 @@ typedef void* nsNativeWidget;
+ #define NS_NATIVE_COMPOSITOR_DISPLAY   105
+ #endif // MOZ_X11
+ #endif
++#ifdef MOZ_WIDGET_ANDROID
++#define NS_JAVA_SURFACE                100
++#define NS_PRESENTATION_WINDOW         101
++#define NS_PRESENTATION_SURFACE        102
++#endif
+ 
+ #define NS_IWIDGET_IID \
+ { 0x06396bf6, 0x2dd8, 0x45e5, \
+diff --git a/xpcom/build/XREChildData.h b/xpcom/build/XREChildData.h
+index b4cd9895ff..c6d346193a 100644
+--- a/xpcom/build/XREChildData.h
++++ b/xpcom/build/XREChildData.h
+@@ -19,10 +19,12 @@ class GMPLoader;
+  */
+ struct XREChildData
+ {
++#if !defined(MOZ_WIDGET_ANDROID)
+   /**
+    * Used to load the GMP binary.
+    */
+   mozilla::UniquePtr<mozilla::gmp::GMPLoader> gmpLoader;
++#endif
+ };
+ 
+ #endif // XREChildData_h
+diff --git a/xpcom/io/nsLocalFileUnix.cpp b/xpcom/io/nsLocalFileUnix.cpp
+index 901ae833e8..0ed4d54342 100644
+--- a/xpcom/io/nsLocalFileUnix.cpp
++++ b/xpcom/io/nsLocalFileUnix.cpp
+@@ -21,7 +21,7 @@
+ #include <ctype.h>
+ #include <locale.h>
+ 
+-#if defined(HAVE_SYS_QUOTA_H) && defined(HAVE_LINUX_QUOTA_H)
++#if defined(HAVE_SYS_QUOTA_H) && defined(HAVE_LINUX_QUOTA_H) && !defined(ANDROID)
+ #define USE_LINUX_QUOTACTL
+ #include <sys/mount.h>
+ #include <sys/quota.h>

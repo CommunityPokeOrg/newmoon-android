@@ -258,9 +258,11 @@
             </intent-filter>
         </receiver>
 
+#ifdef MOZ_ANDROID_SEARCH_ACTIVITY
 #include ../services/manifests/FxAccountAndroidManifest_activities.xml.in
 #ifdef MOZ_ANDROID_SEARCH_ACTIVITY
 #include ../search/manifests/SearchAndroidManifest_activities.xml.in
+#endif
 #endif
 
         <activity android:name="org.mozilla.gecko.preferences.GeckoPreferences"
@@ -403,7 +405,6 @@
         </service>
 #endif
 
-#include ../services/manifests/FxAccountAndroidManifest_services.xml.in
 
         <service
             android:name="org.mozilla.gecko.tabqueue.TabReceivedService"
@@ -418,6 +419,8 @@
 #endif
 
 #ifdef MOZ_ANDROID_GCM
+#include ../services/manifests/FxAccountAndroidManifest_services.xml.in
+
 #include GcmAndroidManifest_services.xml.in
 #endif
 

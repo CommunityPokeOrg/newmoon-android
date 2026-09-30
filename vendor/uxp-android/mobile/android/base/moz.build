@@ -1111,7 +1111,7 @@ if CONFIG['MOZ_ANDROID_SEARCH_ACTIVITY']:
 
     search_activity = add_java_jar('search-activity')
     search_activity.sources += [search_source_dir + '/' + f for f in search_activity_sources]
-    search_activity.javac_flags += ['-Xlint:all']
+    search_activity.javac_flags += ['-Xlint:all', '-Xlint:-deprecation']
     search_activity.extra_jars = [
         CONFIG['ANDROID_SUPPORT_ANNOTATIONS_JAR_LIB'],
         CONFIG['ANDROID_SUPPORT_V4_AAR_LIB'],

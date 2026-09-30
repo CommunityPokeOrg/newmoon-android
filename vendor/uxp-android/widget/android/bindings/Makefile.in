@@ -8,13 +8,18 @@
 
 annotation_processor_jar_files := \
   $(DEPTH)/build/annotationProcessors/annotationProcessors.jar \
-  $(ANDROID_TOOLS)/lib/lint.jar \
-  $(ANDROID_TOOLS)/lib/lint-checks.jar \
+  $(ANDROID_TOOLS)/lib/lint/cli/cli.jar \
+  $(ANDROID_TOOLS)/lib/lint/tools.lint-api.jar \
+  $(ANDROID_TOOLS)/lib/lint/tools.lint-checks.jar \
+  $(ANDROID_TOOLS)/lib/lint/tools.lint-model.jar \
+  $(wildcard $(ANDROID_TOOLS)/lib/*.jar) \
+  $(wildcard $(ANDROID_TOOLS)/lib/*/*.jar) \
+  $(wildcard $(ANDROID_TOOLS)/lib/*/*/*.jar) \
   $(NULL)
 
 sdk_processor := \
   $(JAVA) \
-  -Dcom.android.tools.lint.bindir='$(ANDROID_TOOLS)' \
+  -Dcom.android.tools.lint.bindir='$(ANDROID_SDK_ROOT)/cmdline-tools' \
   -classpath $(subst $(NULL) ,:,$(strip $(annotation_processor_jar_files))) \
   org.mozilla.gecko.annotationProcessors.SDKProcessor
 

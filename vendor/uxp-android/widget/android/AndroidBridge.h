@@ -54,7 +54,6 @@ class AutoLocalJNIFrame;
 class Runnable;
 
 namespace hal {
-class BatteryInformation;
 class NetworkInformation;
 } // namespace hal
 
@@ -159,7 +158,6 @@ public:
 
     void HandleGeckoMessage(JSContext* cx, JS::HandleObject message);
 
-    void GetCurrentBatteryInformation(hal::BatteryInformation* aBatteryInfo);
 
     void GetCurrentNetworkInformation(hal::NetworkInformation* aNetworkInfo);
 

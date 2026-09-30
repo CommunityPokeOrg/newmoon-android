@@ -40,7 +40,7 @@ MOZ_APP_ID={aa3c5121-dab2-40e2-81ca-7ea25febc110}
 MOZ_APP_STATIC_INI=1
 
 # Enable second screen using native Android libraries.
-MOZ_NATIVE_DEVICES=
+MOZ_NATIVE_DEVICES=1
 
 # Enable install tracking SDK if we have Google Play support; MOZ_NATIVE_DEVICES
 # is a proxy flag for that support.

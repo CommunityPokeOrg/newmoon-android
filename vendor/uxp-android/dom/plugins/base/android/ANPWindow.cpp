@@ -130,7 +130,7 @@ void anp_window_requestFullScreenOrientation(NPP instance, ANPScreenOrientation 
 }
 
 void InitWindowInterface(ANPWindowInterfaceV0 *i) {
-  _assert(i->inSize == sizeof(*i));
+  assert(i->inSize == sizeof(*i));
   ASSIGN(i, setVisibleRects);
   ASSIGN(i, clearVisibleRects);
   ASSIGN(i, showKeyboard);
@@ -140,7 +140,7 @@ void InitWindowInterface(ANPWindowInterfaceV0 *i) {
 }
 
 void InitWindowInterfaceV2(ANPWindowInterfaceV2 *i) {
-  _assert(i->inSize == sizeof(*i));
+  assert(i->inSize == sizeof(*i));
   ASSIGN(i, setVisibleRects);
   ASSIGN(i, clearVisibleRects);
   ASSIGN(i, showKeyboard);

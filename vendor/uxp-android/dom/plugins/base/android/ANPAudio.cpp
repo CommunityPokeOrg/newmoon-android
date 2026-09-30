@@ -369,7 +369,7 @@ anp_audio_trackLatency(ANPAudioTrack* s) {
 }
 
 void InitAudioTrackInterfaceV0(ANPAudioTrackInterfaceV0 *i) {
-  _assert(i->inSize == sizeof(*i));
+  assert(i->inSize == sizeof(*i));
   ASSIGN(i, newTrack);
   ASSIGN(i, deleteTrack);
   ASSIGN(i, start);
@@ -379,7 +379,7 @@ void InitAudioTrackInterfaceV0(ANPAudioTrackInterfaceV0 *i) {
 }
 
 void InitAudioTrackInterfaceV1(ANPAudioTrackInterfaceV1 *i) {
-  _assert(i->inSize == sizeof(*i));
+  assert(i->inSize == sizeof(*i));
   ASSIGN(i, newTrack);
   ASSIGN(i, deleteTrack);
   ASSIGN(i, start);

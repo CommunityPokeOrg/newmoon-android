@@ -65,6 +65,7 @@ using mozilla::Unused;
 #include "mozilla/layers/IAPZCTreeManager.h"
 #include "GLContext.h"
 #include "GLContextProvider.h"
+#include "GLContextEGL.h"
 #include "ScopedGLHelpers.h"
 #include "mozilla/layers/CompositorOGL.h"
 #include "AndroidContentController.h"
@@ -1276,7 +1277,7 @@ public:
         if (sSurface) {
             // Destroy the EGL surface! The compositor is paused so it should
             // be okay to destroy the surface here.
-            mozilla::gl::GLContextProvider::DestroyEGLSurface(sSurface);
+            mozilla::gl::GLContextEGL::DestroySurface(sSurface);
             sSurface = nullptr;
         }
 

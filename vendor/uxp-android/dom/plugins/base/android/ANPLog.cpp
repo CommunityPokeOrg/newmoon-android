@@ -21,6 +21,6 @@ anp_log_log(ANPLogType type, const char format[], ...) {
 }
 
 void InitLogInterface(ANPLogInterfaceV0 *i) {
-      _assert(i->inSize == sizeof(*i));
+      assert(i->inSize == sizeof(*i));
       ASSIGN(i, log);
 }

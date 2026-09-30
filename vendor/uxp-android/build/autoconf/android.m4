@@ -256,16 +256,16 @@ case "$target" in
       AC_MSG_ERROR([The program adb was not found.])
     fi
 
-    dnl Modern SDKs have no tools/ dir; the emulator lives at
-    dnl $ANDROID_SDK_ROOT/emulator. Make it optional for headless builds.
+    dnl cmdline-tools carries the lint jars the annotation processor
+    dnl needs; fall back to the legacy tools/ dir, then emulator/.
     android_tools=""
-    for _d in "$android_sdk_root"/emulator "$android_sdk_root"/tools; do
-        if test -f "$_d/emulator"; then
+    for _d in "$android_sdk_root"/cmdline-tools/latest "$android_sdk_root"/tools "$android_sdk_root"/emulator; do
+        if test -d "$_d"; then
             android_tools="$_d"
             break
         fi
     done
-    MOZ_PATH_PROG(EMULATOR, emulator, :, [$android_tools])
+    MOZ_PATH_PROG(EMULATOR, emulator, :, ["$android_sdk_root"/emulator:"$android_sdk_root"/tools])
 
     ANDROID_TARGET_SDK="${android_target_sdk}"
     ANDROID_SDK="${android_sdk}"

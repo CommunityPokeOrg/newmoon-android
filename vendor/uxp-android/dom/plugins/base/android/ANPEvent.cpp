@@ -13,19 +13,42 @@
 #define LOG(args...)  __android_log_print(ANDROID_LOG_INFO, "GeckoPlugins" , ## args)
 #define ASSIGN(obj, name)   (obj)->name = anp_event_##name
 
+namespace {
+
+class PluginEventRunnable final : public mozilla::Runnable
+{
+public:
+  PluginEventRunnable(nsNPAPIPluginInstance* aInstance, const ANPEvent* aEvent)
+    : mozilla::Runnable("PluginEventRunnable"), mInstance(aInstance), mEvent(*aEvent)
+  {}
+
+  NS_IMETHOD Run() override
+  {
+    mInstance->HandleEvent(&mEvent, nullptr);
+    return NS_OK;
+  }
+
+private:
+  RefPtr<nsNPAPIPluginInstance> mInstance;
+  ANPEvent mEvent;
+};
+
+} // namespace
+
 void
 anp_event_postEvent(NPP instance, const ANPEvent* event)
 {
   LOG("%s", __PRETTY_FUNCTION__);
 
   nsNPAPIPluginInstance* pinst = static_cast<nsNPAPIPluginInstance*>(instance->ndata);
-  pinst->PostEvent((void*) event);
+  RefPtr<PluginEventRunnable> r = new PluginEventRunnable(pinst, event);
+  NS_DispatchToMainThread(r);
   
   LOG("returning from %s", __PRETTY_FUNCTION__);
 }
 
 
 void InitEventInterface(ANPEventInterfaceV0 *i) {
-  _assert(i->inSize == sizeof(*i));
+  assert(i->inSize == sizeof(*i));
   ASSIGN(i, postEvent);
 }

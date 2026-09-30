@@ -4,6 +4,7 @@
      on top of a pre-installed bouncer APK.  Add such elements here, so that
      they can be easily shared between the two APKs. -->
 
+
 #include ../services/manifests/FxAccountAndroidManifest_permissions.xml.in
 
 #ifdef MOZ_ANDROID_SEARCH_ACTIVITY

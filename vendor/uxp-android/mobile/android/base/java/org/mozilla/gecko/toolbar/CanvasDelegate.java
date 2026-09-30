@@ -35,12 +35,7 @@ class CanvasDelegate {
 
     void draw(Canvas canvas, Path path, int width, int height) {
         // Save the canvas. All PorterDuff operations should be done in a offscreen bitmap.
-        int count = canvas.saveLayer(0, 0, width, height, null,
-                                     Canvas.MATRIX_SAVE_FLAG |
-                                     Canvas.CLIP_SAVE_FLAG |
-                                     Canvas.HAS_ALPHA_LAYER_SAVE_FLAG |
-                                     Canvas.FULL_COLOR_LAYER_SAVE_FLAG |
-                                     Canvas.CLIP_TO_LAYER_SAVE_FLAG);
+        int count = canvas.saveLayer(0, 0, width, height, null);
 
         // Do a default draw.
         mDrawManager.defaultDraw(canvas);

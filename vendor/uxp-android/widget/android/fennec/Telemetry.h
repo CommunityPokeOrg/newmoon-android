@@ -10,7 +10,6 @@
 #include "nsAppShell.h"
 #include "nsIAndroidBridge.h"
 
-#include "mozilla/Telemetry.h"
 
 namespace mozilla {
 namespace widget {

@@ -53,7 +53,7 @@ public class WifiScanner extends BroadcastReceiver {
     /* Testing */
     public static boolean sIsTestMode;
     public List<ScanResult> mTestModeFakeScanResults = new ArrayList<ScanResult>();
-    public Set<String> getAccessPoints(android.test.AndroidTestCase restrictedAccessor) { return mAPs; }
+    public Set<String> getAccessPoints(Object restrictedAccessor) { return mAPs; }
     /* ------- */
 
     public WifiScanner(Context c) {

@@ -95,12 +95,12 @@ public class BouncerService extends IntentService {
         }
     }
 
-    private String getDataDir() {
+    private String getAppDataDir() {
         return getApplicationInfo().dataDir;
     }
 
     private File getDataFile(final String path) {
-        File outFile = new File(getDataDir(), path);
+        File outFile = new File(getAppDataDir(), path);
         File dir = outFile.getParentFile();
 
         if (dir != null && !dir.exists()) {

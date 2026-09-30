@@ -61,7 +61,7 @@ public class RemotePresentationService extends CastRemoteDisplayLocalService {
         this.deviceId = deviceId;
     }
 
-    public String getDeviceId() {
+    public String getPresentationDeviceId() {
         return deviceId;
     }
 

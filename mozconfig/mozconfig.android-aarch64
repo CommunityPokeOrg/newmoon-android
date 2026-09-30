@@ -27,3 +27,4 @@ export NM="$_TC/bin/llvm-nm"
 mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/../obj-android-aarch64
 ac_add_options --disable-pulseaudio
 ac_add_options --disable-alsa
+ac_add_options --disable-printing

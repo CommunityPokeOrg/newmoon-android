@@ -43,14 +43,18 @@ UNIFIED_SOURCES += [
     'nsAndroidProtocolHandler.cpp',
     'nsAppShell.cpp',
     'nsClipboard.cpp',
-    'nsDeviceContextAndroid.cpp',
     'nsIdleServiceAndroid.cpp',
     'nsLookAndFeel.cpp',
-    'nsPrintOptionsAndroid.cpp',
     'nsScreenManagerAndroid.cpp',
     'nsWidgetFactory.cpp',
     'nsWindow.cpp',
 ]
+
+if CONFIG['NS_PRINTING']:
+    SOURCES += [
+        'nsDeviceContextAndroid.cpp',
+        'nsPrintOptionsAndroid.cpp',
+    ]
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
@@ -59,6 +63,7 @@ FINAL_LIBRARY = 'xul'
 LOCAL_INCLUDES += [
     '/docshell/base',
     '/dom/base',
+    '/dom/plugins/base/android',
     '/dom/system/android',
     '/netwerk/base',
     '/netwerk/cache',

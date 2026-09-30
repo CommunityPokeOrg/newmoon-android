@@ -29,6 +29,7 @@
 
 #include ../services/strings.xml.in
 
+
   <string name="firstrun_panel_title_welcome">&firstrun_panel_title_welcome;</string>
 
   <string name="firstrun_urlbar_message">&firstrun_urlbar_message;</string>
@@ -40,6 +41,12 @@
   <string name="firstrun_data_message">&firstrun_data_message;</string>
   <string name="firstrun_data_subtext">&firstrun_data_subtext2;</string>
   <string name="firstrun_sync_title">&firstrun_sync_title;</string>
+  <string name="fxaccount_getting_started_welcome_to_sync">&fxaccount_getting_started_welcome_to_sync;</string>
+  <string name="fxaccount_getting_started_description">&fxaccount_getting_started_description2;</string>
+  <string name="fxaccount_getting_started_get_started">&fxaccount_getting_started_get_started;</string>
+  <string name="sync_configure_engines_title_passwords">&sync.configure.engines.title.passwords2;</string>
+  <string name="sync_configure_engines_title_history">&sync.configure.engines.title.history;</string>
+  <string name="sync_configure_engines_title_tabs">&sync.configure.engines.title.tabs;</string>
   <string name="firstrun_sync_message">&firstrun_sync_message;</string>
   <string name="firstrun_sync_subtext">&firstrun_sync_subtext;</string>
   <string name="firstrun_signin_message">&firstrun_signin_message;</string>

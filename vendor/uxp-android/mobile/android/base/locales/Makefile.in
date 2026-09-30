@@ -16,7 +16,10 @@ SEARCHSTRINGSPATH = $(abspath $(call MERGE_FILE,search_strings.dtd))
 SYNCSTRINGSPATH = $(abspath $(call MERGE_FILE,sync_strings.dtd))
 STRINGSPATH = $(abspath $(call MERGE_FILE,android_strings.dtd))
 ifeq (,$(XPI_NAME))
-BRANDPATH = $(topobjdir)/dist/bin/chrome/$(AB_CD)/locale/branding/brand.dtd
+# Point at the source file rather than the packaged chrome: branding/locales
+# is packaged in the same libs phase, so depending on its output races
+# parallel builds.  Branding is en-US-only in-tree.
+BRANDPATH = $(topsrcdir)/$(MOZ_BRANDING_DIRECTORY)/locales/en-US/brand.dtd
 else
 BRANDPATH = $(ABS_DIST)/xpi-stage/$(XPI_NAME)/chrome/$(AB_CD)/locale/branding/brand.dtd
 endif

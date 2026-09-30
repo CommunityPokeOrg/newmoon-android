@@ -21,63 +21,6 @@ namespace mozilla {
 namespace hal_impl {
 
 void
-Vibrate(const nsTArray<uint32_t> &pattern, const WindowIdentifier &)
-{
-  // Ignore the WindowIdentifier parameter; it's here only because hal::Vibrate,
-  // hal_sandbox::Vibrate, and hal_impl::Vibrate all must have the same
-  // signature.
-
-  // Strangely enough, the Android Java API seems to treat vibrate([0]) as a
-  // nop.  But we want to treat vibrate([0]) like CancelVibrate!  (Note that we
-  // also need to treat vibrate([]) as a call to CancelVibrate.)
-  bool allZero = true;
-  for (uint32_t i = 0; i < pattern.Length(); i++) {
-    if (pattern[i] != 0) {
-      allZero = false;
-      break;
-    }
-  }
-
-  if (allZero) {
-    hal_impl::CancelVibrate(WindowIdentifier());
-    return;
-  }
-
-  AndroidBridge* b = AndroidBridge::Bridge();
-  if (!b) {
-    return;
-  }
-
-  b->Vibrate(pattern);
-}
-
-void
-CancelVibrate(const WindowIdentifier &)
-{
-  // Ignore WindowIdentifier parameter.
-
-  java::GeckoAppShell::CancelVibrate();
-}
-
-void
-EnableBatteryNotifications()
-{
-  java::GeckoAppShell::EnableBatteryNotifications();
-}
-
-void
-DisableBatteryNotifications()
-{
-  java::GeckoAppShell::DisableBatteryNotifications();
-}
-
-void
-GetCurrentBatteryInformation(hal::BatteryInformation* aBatteryInfo)
-{
-  AndroidBridge::Bridge()->GetCurrentBatteryInformation(aBatteryInfo);
-}
-
-void
 EnableNetworkNotifications()
 {
   java::GeckoAppShell::EnableNetworkNotifications();

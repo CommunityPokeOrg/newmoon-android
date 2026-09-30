@@ -19,6 +19,8 @@ jar.sources += [
     'utils/Utils.java',
 ]
 jar.extra_jars += [
-    CONFIG['ANDROID_TOOLS'] + '/lib/lint.jar',
-    CONFIG['ANDROID_TOOLS'] + '/lib/lint-checks.jar',
+    CONFIG['ANDROID_TOOLS'] + '/lib/lint/cli/cli.jar',
+    CONFIG['ANDROID_TOOLS'] + '/lib/lint/tools.lint-api.jar',
+    CONFIG['ANDROID_TOOLS'] + '/lib/lint/tools.lint-checks.jar',
+    CONFIG['ANDROID_TOOLS'] + '/lib/lint/tools.lint-model.jar',
 ]

@@ -239,7 +239,10 @@ classes.dex: .gradle.deps
 else
 classes.dex: .proguard.deps
 	$(REPORT_BUILD)
-	$(DX) --dex --output=classes.dex jars-proguarded
+	rm -rf dex-out
+	mkdir -p dex-out
+	$(D8) --output dex-out jars-proguarded/*.jar
+	mv dex-out/classes.dex $@
 endif
 
 ifdef MOZ_DISABLE_PROGUARD

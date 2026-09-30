@@ -74,14 +74,14 @@ void anp_system_setPowerState(NPP instance, ANPPowerState powerState)
 }
 
 void InitSystemInterfaceV1(ANPSystemInterfaceV1 *i) {
-  _assert(i->inSize == sizeof(*i));
+  assert(i->inSize == sizeof(*i));
   ASSIGN(i, getApplicationDataDirectory);
   ASSIGN(i, loadJavaClass);
   ASSIGN(i, setPowerState);
 }
 
 void InitSystemInterfaceV2(ANPSystemInterfaceV2 *i) {
-  _assert(i->inSize == sizeof(*i));
+  assert(i->inSize == sizeof(*i));
   ASSIGN(i, getApplicationDataDirectory);
   ASSIGN(i, loadJavaClass);
   ASSIGN(i, setPowerState);
