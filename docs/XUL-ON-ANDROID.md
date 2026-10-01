@@ -39,25 +39,39 @@ minimal XUL deck. It is **not** the desktop Pale Moon UI.
   management, VIEW intents create real tabs (URL bar updates, throbber).
 - NSS initializes; TLS code paths load.
 
-## Not yet verified
+## Verified since first writing this doc
 
-- A content page completing a load. Evidence today: the tab's `<browser>`
-  docshell does not appear to execute an HTTP navigation (empty
-  places/history DB, empty cache2, no sockets, silent console). The
-  chrome window itself is created, so the failure is somewhere between
-  `BrowserApp.startup()`/tab-browser creation and `InternalLoad` —
-  undiagnosed, possibly an emulator artifact.
+- **Content pages complete loads, HTTP and HTTPS** (2026-10-01): a VIEW
+  intent to `http://neverssl.com` ran the full tab lifecycle
+  (`START → TITLE → LOCATION_CHANGE → SECURITY_CHANGE → PAGE_SHOW →
+  STOP → FAVICON → THUMBNAIL`) including a followed redirect chain;
+  `https://example.com` completed the same cycle over TLS. The earlier
+  "docshell never starts a navigation" finding was an observability
+  artifact: libxul's bundled liblog silently discarded all native
+  logging (see STATUS.md root cause 3), so the working pipeline was
+  invisible.
+- Chrome JS now starts without functional errors: every console error
+  surfaced after `browser.xul` load was root-caused and fixed
+  (unpreprocessed `browser.js`, missing `Services.androidBridge` /
+  `Services.telemetry`/`UITelemetry`, parental-controls, missing
+  tracking prefs, packaging drift, unguarded imports of UXP-deleted
+  modules).
+
+## Still not verified
+
 - User interaction: the emulator wedges its input dispatch under
-  ndk_translation load (system_server ANRs), so taps/keys cannot be tested.
-  Interactive and content-load verification need a real arm64 device.
-- First paint of rendered web content in the LayerView surface.
+  ndk_translation load (system_server ANRs), so taps/keys cannot be
+  tested. Interactive verification needs a real arm64 device.
+- First paint of rendered web content in the LayerView surface
+  (navigation events and THUMBNAIL captures fire; pixels behind the
+  persistent system notice dialog are unconfirmed).
 
 ## How well does XUL map to Android?
 
 **Platform layer — maps well.** XUL parsing, XBL, chrome:// URIs,
-omni.ja packaging, startup caches all work with minor fixes (the two
-root-cause bugs fixed to date were packaging/gating issues, not
-architecture mismatches). Rendering goes through the same layer
+omni.ja packaging, startup caches, and real content navigations all
+work; every root-cause bug fixed to date was packaging/gating/observability,
+not an architecture mismatch. Rendering goes through the same layer
 pipeline as desktop; Android supplies an nsWindow + Compositor via
 LayerView/OpenGL instead of a native window. There is no fundamental
 reason a full XUL chrome cannot render inside that surface.
@@ -96,6 +110,8 @@ menu/input/theme adaptation being the hard part.
   (Java UI + minimal XUL document) + New Moon branding.
 - Target: desktop Pale Moon chrome rendered in-chrome, gated on (a)
   content loads verified working and (b) widget/theme glue.
-- Honest bottom line: XUL itself runs fine on Android; the open work is
-  content-load diagnosis, compositor verification, and chrome
-  substitution — none of which are architectural blockers.
+- Honest bottom line: XUL itself runs fine on Android — the Fennec XUL
+  document, its bindings, its chrome JS, and real page loads all work.
+  The open work is compositor pixel-verification, interactive input,
+  and desktop-chrome substitution — none of which are architectural
+  blockers.
