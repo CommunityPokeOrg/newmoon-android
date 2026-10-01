@@ -1,0 +1,106 @@
+--- a/memory/mozjemalloc/jemalloc.c
++++ b/memory/mozjemalloc/jemalloc.c
+@@ -4002,6 +4002,59 @@
+ 	return (ret);
+ }
+ 
++#ifdef ANDROID
++#include <dlfcn.h>
++
++/*
++ * The malloc() family that libxul exports is also reachable for pointers
++ * that jemalloc did not allocate: other DSOs in the process (libnspr4,
++ * libnss3, Bionic and system libraries) resolve malloc() to Bionic's
++ * allocator, and buffers they produce can later be passed to libxul's
++ * exported free() or realloc().  Dereferencing the would-be chunk header
++ * of a foreign pointer crashes when it lands on an unmapped page —
++ * observed on Android builds that use 16 KB pages, where Bionic's Scudo
++ * allocator holds its primary heap in a large PROT_NONE reserve.
++ *
++ * jemalloc records every chunk it allocates (arena and huge alike) in
++ * chunk_rtree, which can be queried without dereferencing the chunk
++ * itself, so a pointer with no chunk entry cannot have come from
++ * jemalloc.  Such pointers are handed back to Bionic's allocator.
++ */
++static void	(*jemalloc_libc_free)(void *);
++static void	*(*jemalloc_libc_realloc)(void *, size_t);
++static volatile bool	jemalloc_libc_resolved;
++
++static bool
++jemalloc_resolve_libc(void)
++{
++	void *handle;
++
++	if (!jemalloc_libc_resolved) {
++		handle = dlopen("libc.so",
++		    RTLD_NOW | RTLD_LOCAL | RTLD_NOLOAD);
++		if (handle == NULL)
++			handle = dlopen("libc.so", RTLD_NOW | RTLD_LOCAL);
++		if (handle != NULL) {
++			jemalloc_libc_realloc =
++			    (void *(*)(void *, size_t))
++			    dlsym(handle, "realloc");
++			jemalloc_libc_free =
++			    (void (*)(void *))dlsym(handle, "free");
++		}
++		jemalloc_libc_resolved = true;
++	}
++	return (jemalloc_libc_free != NULL);
++}
++
++static inline bool
++jemalloc_foreign_ptr(const void *ptr)
++{
++	return (chunk_rtree == NULL ||
++	    malloc_rtree_get(chunk_rtree,
++	    (uintptr_t)CHUNK_ADDR2BASE(ptr)) == NULL);
++}
++#endif /* ANDROID */
++
+ /*
+  * Validate ptr before assuming that it points to an allocation.  Currently,
+  * the following validation is performed:
+@@ -4237,6 +4290,13 @@
+ 	assert(ptr != NULL);
+ 
+ 	offset = CHUNK_ADDR2OFFSET(ptr);
++#ifdef ANDROID
++	if (jemalloc_foreign_ptr(ptr)) {
++		if (jemalloc_resolve_libc())
++			jemalloc_libc_free(ptr);
++		return;
++	}
++#endif
+ 	if (offset != 0)
+ 		arena_dalloc(ptr, offset);
+ 	else
+@@ -6057,6 +6117,15 @@
+ 	if (ptr != NULL) {
+ 		assert(malloc_initialized);
+ 
++#ifdef ANDROID
++		if (jemalloc_foreign_ptr(ptr)) {
++			if (jemalloc_resolve_libc() &&
++			    jemalloc_libc_realloc != NULL)
++				ret = jemalloc_libc_realloc(ptr, size);
++			else
++				ret = NULL;
++		} else
++#endif
+ 		ret = iralloc(ptr, size);
+ 
+ 		if (ret == NULL) {
+@@ -6110,6 +6179,13 @@
+ 	 */
+ 	assert(CHUNK_ADDR2OFFSET(NULL) == 0);
+ 	offset = CHUNK_ADDR2OFFSET(ptr);
++#ifdef ANDROID
++	if (ptr != NULL && jemalloc_foreign_ptr(ptr)) {
++		if (jemalloc_resolve_libc())
++			jemalloc_libc_free(ptr);
++		return;
++	}
++#endif
+ 	if (offset != 0)
+ 		arena_dalloc(ptr, offset);
+ 	else if (ptr != NULL)
