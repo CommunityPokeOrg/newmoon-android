@@ -1,0 +1,14 @@
+diff --git a/mozglue/linker/Utils.h b/mozglue/linker/Utils.h
+index c5314ef60..555261410 100644
+--- a/mozglue/linker/Utils.h
++++ b/mozglue/linker/Utils.h
+@@ -107,7 +107,8 @@ typedef mozilla::Scoped<AutoCloseFILETraits> AutoCloseFILE;
+  */
+ static inline size_t PageSize()
+ {
+-  return 4096;
++  static const size_t kernelPageSize = getpagesize();
++  return kernelPageSize;
+ }
+ 
+ static inline uintptr_t AlignedPtr(uintptr_t ptr, size_t alignment)
