@@ -1,0 +1,26 @@
+# -*- Mode: python; indent-tabs-mode: nil; tab-width: 40 -*-
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+DEFINES['_GNU_SOURCE'] = True
+DEFINES['IMPL_MFBT'] = True
+
+DISABLE_STL_WRAPPING = True
+
+LOCAL_INCLUDES += [
+    '!/xpcom',
+    '/memory/build',
+]
+
+if CONFIG['MOZ_MIMALLOC']:
+    LOCAL_INCLUDES += ['/memory/mimalloc/include']
+
+SOURCES += [
+    'mozalloc_ops.cpp',
+    'mozalloc_xul.cpp',
+]
+
+FINAL_LIBRARY = 'memory'
+
+Library('mozalloc_xul')

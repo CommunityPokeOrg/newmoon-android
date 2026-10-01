@@ -1,3 +1,21 @@
+diff --git a/build/autoconf/icu.m4 b/build/autoconf/icu.m4
+index a822470a37..3d25032d35 100644
+--- a/build/autoconf/icu.m4
++++ b/build/autoconf/icu.m4
+@@ -34,8 +34,11 @@ if test -n "$USE_ICU"; then
+     dnl We won't build ICU data as a separate file when building
+     dnl ICU as a shared library, as we need to fold the data into
+     dnl the shared library in order for consumers like Spidermonkey
+-    dnl to use it without code duplication.
+-    if test -z "$MOZ_SHARED_ICU"; then
++    dnl to use it without code duplication. We also don't do it on
++    dnl Android: an icudt*.dat file could not be read straight out of
++    dnl the APK without being extracted to disk first, so the data is
++    dnl embedded in the ICU library instead (as in mozilla-esr52).
++    if test -z "$MOZ_SHARED_ICU" -a "$MOZ_WIDGET_TOOLKIT" != "android"; then
+         MOZ_ICU_DATA_ARCHIVE=1
+     else
+         MOZ_ICU_DATA_ARCHIVE=
 diff --git a/build/moz.configure/memory.configure b/build/moz.configure/memory.configure
 index 14182ad551..27721adcef 100644
 --- a/build/moz.configure/memory.configure
@@ -31,10 +49,10 @@ index 397576050d..60c43cde35 100644
      # AC_CONFIG_COMMANDS actually only registers tags, not file names
      # but most commands are tagged with the file name they create.
 diff --git a/config/config.mk b/config/config.mk
-index 7425a16435..255d387907 100644
+index 7425a16435..7400dd8075 100644
 --- a/config/config.mk
 +++ b/config/config.mk
-@@ -261,6 +261,12 @@ CFLAGS		= $(OS_CPPFLAGS) $(OS_CFLAGS)
+@@ -261,6 +261,18 @@ CFLAGS		= $(OS_CPPFLAGS) $(OS_CFLAGS)
  CXXFLAGS	= $(OS_CPPFLAGS) $(OS_CXXFLAGS)
  LDFLAGS		= $(OS_LDFLAGS) $(MOZBUILD_LDFLAGS) $(MOZ_FIX_LINK_PATHS)
  
@@ -42,11 +60,51 @@ index 7425a16435..255d387907 100644
 +# may depend on libc++_shared.so (the 2019 port used a static STL too).
 +ifeq (Android,$(OS_TARGET))
 +LDFLAGS		+= -static-libstdc++
++# Keep each library's embedded libc++/libunwind symbols private: when
++# dependent libs' UNDEF STL refs bind to another .so's embedded copy, buffers
++# allocated inside that copy use the WRONG allocator (bionic vs jemalloc) and
++# free() crosses the boundary -> crash. Forcing every .so to pull its own
++# archive members makes STL allocation self-consistent.
++LDFLAGS		+= -Wl,--exclude-libs,libc++_static.a -Wl,--exclude-libs,libc++abi.a -Wl,--exclude-libs,libunwind.a
 +endif
 +
  ifdef MOZ_OPTIMIZE
  ifeq (1,$(MOZ_OPTIMIZE))
  ifneq (,$(if $(MOZ_PROFILE_GENERATE)$(MOZ_PROFILE_USE),$(MOZ_PGO_OPTIMIZE_FLAGS)))
+diff --git a/config/external/icu/data/moz.build b/config/external/icu/data/moz.build
+index 511dd22738..76a260b0d5 100644
+--- a/config/external/icu/data/moz.build
++++ b/config/external/icu/data/moz.build
+@@ -30,7 +30,9 @@ if CONFIG['HAVE_YASM']:
+ elif CONFIG['OS_ARCH'] == 'Darwin':
+     if CONFIG['CPU_ARCH'] != 'ppc':
+         SOURCES += ['icudata_gas.S']
+-elif CONFIG['GNU_AS']:
++elif CONFIG['GNU_AS'] or CONFIG['CC_TYPE'] == 'clang':
++    # clang's integrated assembler accepts the same GNU syntax and
++    # .incbin directive; GNU_AS is only set for actual GNU as.
+     SOURCES += ['icudata_gas.S']
+ 
+ if CONFIG['MOZ_ICU_DATA_ARCHIVE']:
+diff --git a/config/external/icu/moz.build b/config/external/icu/moz.build
+index 6b0cc1a332..0c90cf6a02 100644
+--- a/config/external/icu/moz.build
++++ b/config/external/icu/moz.build
+@@ -9,7 +9,13 @@ DIRS += [
+     'i18n',
+ ]
+ 
+-if CONFIG['MOZ_ICU_DATA_ARCHIVE']:
++if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    # On Android there is no way to read an icudt*.dat file out of the
++    # APK without extracting it first, so the ICU data must be embedded
++    # in the (static, libxul-folded) icu library, as in mozilla-esr52.
++    Library('icu')
++    USE_LIBS += ['icudata']
++elif CONFIG['MOZ_ICU_DATA_ARCHIVE']:
+     DIRS += ['stubdata']
+     USE_LIBS += ['icustubdata']
+     Library('icu')
 diff --git a/config/rules.mk b/config/rules.mk
 index 75b4fed134..5ce135fe00 100644
 --- a/config/rules.mk
@@ -404,6 +462,41 @@ index 1ae4d2e813..2fc521a244 100644
  union magic {
    struct {
      ogg_int32_t hi;
+diff --git a/memory/moz.build b/memory/moz.build
+index 67e16ceac1..d931e7acd9 100644
+--- a/memory/moz.build
++++ b/memory/moz.build
+@@ -18,6 +18,8 @@ if CONFIG['MOZ_MEMORY']:
+         'build',
+         'mozjemalloc',
+     ]
++    if CONFIG['OS_TARGET'] == 'Android':
++        DIRS += ['mozalloc-xul']
+ 
+     if CONFIG['MOZ_REPLACE_MALLOC']:
+         DIRS += ['replace']
+diff --git a/memory/mozalloc/mozalloc_abort.cpp b/memory/mozalloc/mozalloc_abort.cpp
+index a410474b6f..2d7599f8ef 100644
+--- a/memory/mozalloc/mozalloc_abort.cpp
++++ b/memory/mozalloc/mozalloc_abort.cpp
+@@ -9,9 +9,17 @@
+ 
+ #include "mozilla/Assertions.h"
+ 
++#if defined(ANDROID)
++#  include <android/log.h>
++#  define PM_ABORT_LOG(msg) __android_log_print(ANDROID_LOG_WARN, "PMINIT", "mozalloc_abort: %s", msg)
++#else
++#  define PM_ABORT_LOG(msg) (void)0
++#endif
++
+ void
+ mozalloc_abort(const char* const msg)
+ {
++    PM_ABORT_LOG(msg);
+     fputs(msg, stderr);
+     fputs("\n", stderr);
+     MOZ_CRASH();
 diff --git a/memory/mozjemalloc/jemalloc.c b/memory/mozjemalloc/jemalloc.c
 index a7aecc54a1..987faf935a 100644
 --- a/memory/mozjemalloc/jemalloc.c
@@ -444,6 +537,36 @@ index a7aecc54a1..987faf935a 100644
  	pthread_mutexattr_t attr;
  	if (pthread_mutexattr_init(&attr) != 0)
  		return (true);
+diff --git a/mfbt/Assertions.cpp b/mfbt/Assertions.cpp
+index 62630842d6..49f4b6b916 100644
+--- a/mfbt/Assertions.cpp
++++ b/mfbt/Assertions.cpp
+@@ -7,6 +7,9 @@
+ #include "mozilla/Atomics.h"
+ 
+ #include <stdarg.h>
++#if defined(ANDROID)
++#  include <android/log.h>
++#endif
+ 
+ MOZ_BEGIN_EXTERN_C
+ 
+@@ -54,6 +57,15 @@ MOZ_CrashPrintf(const char* aFilename, int aLine, const char* aFormat, ...)
+   int ret = vsnprintf(sPrintfCrashReason, sPrintfCrashReasonSize,
+                       aFormat, aArgs);
+   va_end(aArgs);
++#if defined(ANDROID)
++#  ifndef DEBUG
++  __android_log_print(ANDROID_LOG_WARN, "PMINIT",
++                      "MOZ_CrashPrintf line=%d: %s", aLine, sPrintfCrashReason);
++#  else
++  __android_log_print(ANDROID_LOG_WARN, "PMINIT",
++                      "MOZ_CrashPrintf %s:%d: %s", aFilename, aLine, sPrintfCrashReason);
++#  endif
++#endif
+   MOZ_RELEASE_ASSERT(ret >= 0 && size_t(ret) < sPrintfCrashReasonSize,
+     "Could not write the explanation string to the supplied buffer!");
+ #ifdef DEBUG
 diff --git a/mozglue/build/moz.build b/mozglue/build/moz.build
 index c6b6518119..7a3f9eb907 100644
 --- a/mozglue/build/moz.build
@@ -471,6 +594,50 @@ index c6b6518119..7a3f9eb907 100644
  if CONFIG['MOZ_ASAN']:
      SOURCES += ['AsanOptions.cpp']
  
+diff --git a/mozglue/linker/CustomElf.cpp b/mozglue/linker/CustomElf.cpp
+index 98d94fa8f4..2994c1291a 100644
+--- a/mozglue/linker/CustomElf.cpp
++++ b/mozglue/linker/CustomElf.cpp
+@@ -728,11 +728,17 @@ CustomElf::CallInit()
+   if (init)
+     CallFunction(init);
+ 
++  int init_index = 0;
+   for (Array<void *>::iterator it = init_array.begin();
+-       it < init_array.end(); ++it) {
++       it < init_array.end(); ++it, ++init_index) {
+     /* Android x86 NDK wrongly puts 0xffffffff in INIT_ARRAY */
+-    if (*it && *it != reinterpret_cast<void *>(-1))
++    if (*it && *it != reinterpret_cast<void *>(-1)) {
++      DEBUG_LOG("%s: init_array[%d] vaddr=%p", GetPath(), init_index,
++                reinterpret_cast<const void *>(
++                    reinterpret_cast<const char *>(*it) -
++                    reinterpret_cast<const char *>(base.get())));
+       CallFunction(*it);
++    }
+   }
+   initialized = true;
+   return true;
+diff --git a/mozglue/linker/ElfLoader.cpp b/mozglue/linker/ElfLoader.cpp
+index dd3d7daa8b..bbac340872 100644
+--- a/mozglue/linker/ElfLoader.cpp
++++ b/mozglue/linker/ElfLoader.cpp
+@@ -27,6 +27,15 @@ __gnu_Unwind_Find_exidx(void *pc, int *pcount) __attribute__((weak));
+  * containing this code. */
+ extern "C" Elf::Dyn _DYNAMIC[];
+ 
++/* Exported so libraries loaded through the custom linker (libxul etc.)
++ * can emit diagnostics through the real liblog even though they may
++ * bundle their own stub __android_log_* implementations. */
++extern "C" MOZ_EXPORT void
++moz_pmlog(const char *msg)
++{
++  __android_log_print(ANDROID_LOG_WARN, "PMINIT", "%s", msg);
++}
++
+ using namespace mozilla;
+ 
+ /**
 diff --git a/mozglue/linker/Elfxx.h b/mozglue/linker/Elfxx.h
 index 33aa14ca40..82a4d31c63 100644
 --- a/mozglue/linker/Elfxx.h
@@ -964,8 +1131,43 @@ index 55586d9a78..edb513ad59 100644
      '/xpcom',
      '/modules/libpref',
      '/intl',
+diff --git a/toolkit/xre/moz.build b/toolkit/xre/moz.build
+index b188eaea5b..9c2d86400b 100644
+--- a/toolkit/xre/moz.build
++++ b/toolkit/xre/moz.build
+@@ -60,6 +60,10 @@ SOURCES += [
+     'ProfileReset.cpp',
+ ]
+ 
++if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
++    SOURCES += ['nsAndroidStartup.cpp']
++    LOCAL_INCLUDES += ['/mozglue/android']
++
+ if CONFIG['MOZ_INSTRUMENT_EVENT_LOOP']:
+     UNIFIED_SOURCES += [
+         'EventTracer.cpp',
+diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
+index 0ed2c3e6c8..6a6c412f01 100644
+--- a/toolkit/xre/nsAppRunner.cpp
++++ b/toolkit/xre/nsAppRunner.cpp
+@@ -4018,7 +4018,14 @@ XRE_InitCommandLine(int aArgc, char* aArgv[])
+   delete[] canonArgs;
+ #endif
+ 
+-  if (PR_GetEnv("UXP_CUSTOM_OMNI")) {
++#if !defined(MOZ_WIDGET_ANDROID)
++  if (PR_GetEnv("UXP_CUSTOM_OMNI"))
++#else
++  // Fennec always passes -greomni pointing at the APK, whose
++  // assets/omni.ja must be initialized for component/xpt registration.
++  if (true)
++#endif
++  {
+     // Process CLI parameters for specifying custom omnijars
+     const char *path = nullptr;
+     ArgResult ar = CheckArg("greomni", true, &path);
 diff --git a/toolkit/xre/nsXREDirProvider.cpp b/toolkit/xre/nsXREDirProvider.cpp
-index e38cc4f35b..6250f1e09c 100644
+index e38cc4f35b..6e2c5e47a2 100644
 --- a/toolkit/xre/nsXREDirProvider.cpp
 +++ b/toolkit/xre/nsXREDirProvider.cpp
 @@ -8,7 +8,9 @@
@@ -978,6 +1180,34 @@ index e38cc4f35b..6250f1e09c 100644
  
  #include "nsIAddonInterposition.h"
  #include "nsIAppStartup.h"
+@@ -1327,6 +1329,10 @@ nsXREDirProvider::GetUserDataDirectoryHome(nsIFile** aFile, bool aLocal)
+   if (!homeDir || !*homeDir)
+     return NS_ERROR_FAILURE;
+ 
++#ifdef ANDROID /* We want (ProfD == ProfLD) on Android. */
++  aLocal = false;
++#endif
++
+   if (aLocal) {
+     // If $XDG_CACHE_HOME is defined use it, otherwise use $HOME/.cache.
+     const char* cacheHome = getenv("XDG_CACHE_HOME");
+@@ -1533,6 +1539,16 @@ nsXREDirProvider::AppendProfilePath(nsIFile* aFile,
+   }
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
++#elif defined(ANDROID)
++  // The directory used for storing profiles
++  // The parent of this directory is set in GetUserDataDirectoryHome
++  // XXX: handle gAppData->profile properly
++  // XXXsmaug ...and the rest of the profile creation!
++  MOZ_ASSERT(!aAppName,
++             "Profile creation for external applications is not implemented!");
++  rv = aFile->AppendNative(nsDependentCString("mozilla"));
++  NS_ENSURE_SUCCESS(rv, rv);
++
+ #elif defined(XP_UNIX)
+   nsAutoCString folder;
+   // Make it hidden (by starting with "."), except when local (the
 diff --git a/uriloader/exthandler/moz.build b/uriloader/exthandler/moz.build
 index 633c56e26d..db23a21894 100644
 --- a/uriloader/exthandler/moz.build
@@ -1068,6 +1298,33 @@ index 059fa85100..701ed7baec 100644
  
  #define NS_IWIDGET_IID \
  { 0x06396bf6, 0x2dd8, 0x45e5, \
+diff --git a/xpcom/build/BinaryPath.h b/xpcom/build/BinaryPath.h
+index 6c2622a557..fc05110951 100644
+--- a/xpcom/build/BinaryPath.h
++++ b/xpcom/build/BinaryPath.h
+@@ -83,6 +83,22 @@ private:
+     return rv;
+   }
+ 
++#elif defined(ANDROID)
++  static nsresult Get(const char* argv0, char aResult[MAXPATHLEN])
++  {
++    // On Android, we use the GRE_HOME variable that is set by the Java
++    // bootstrap code.
++    const char* greHome = getenv("GRE_HOME");
++
++    if (!greHome) {
++      return NS_ERROR_FAILURE;
++    }
++
++    snprintf(aResult, MAXPATHLEN, "%s/%s", greHome, "dummy");
++    aResult[MAXPATHLEN - 1] = '\0';
++    return NS_OK;
++  }
++
+ #elif defined(XP_UNIX)
+   static nsresult Get(const char* aArgv0, char aResult[MAXPATHLEN])
+   {
 diff --git a/xpcom/build/XREChildData.h b/xpcom/build/XREChildData.h
 index b4cd9895ff..c6d346193a 100644
 --- a/xpcom/build/XREChildData.h

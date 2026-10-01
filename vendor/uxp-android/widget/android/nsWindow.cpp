@@ -1345,7 +1345,8 @@ nsWindow::GeckoViewSupport::Open(const jni::Class::LocalRef& aCls,
     }
 
     nsCOMPtr<mozIDOMWindowProxy> domWindow;
-    ww->OpenWindow(nullptr, url, nullptr, "chrome,dialog=0,resizable,scrollbars=yes",
+    ww->OpenWindow(nullptr, url, nullptr,
+                   "chrome,dialog=0,resizable,scrollbars=yes",
                    nullptr, getter_AddRefs(domWindow));
     MOZ_RELEASE_ASSERT(domWindow);
 

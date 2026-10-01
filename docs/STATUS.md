@@ -154,31 +154,65 @@ ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
   library (incl. 80 MB libxul), resolves all relocations
   (`ABS64/GLOB_DAT/JUMP_SLOT/RELATIVE`), loads NSS/NSPR/sqlite/hunspell/etc.,
   and begins running libxul's C++ static initializers.
-- **Current crash** (deterministic): `SIGSEGV` fault addr `0x0`
-  (`SI_KERNEL`) on the Gecko thread inside libxul's 4th `.init_array`
-  entry — `_GLOBAL__sub_I_Unified_cpp_media_libstagefright1.cpp`
-  (stagefright `AAtomizer`/`String` statics). Relocations are all
-  resolved (no "Relocation to NULL" warnings), so the null is produced
-  inside the init path itself (function-pointer/vtable/indirect call
-  under investigation). Debug commands used:
-  `adb shell pm clear org.mozilla.fennec_ubuntu`, then
-  `am start -n org.mozilla.fennec_ubuntu/.App --es env0 MOZ_DEBUG_LINKER=1 --es env1 MOZ_LINKER_ONDEMAND=0`.
 - `MOZ_LINKER_ONDEMAND=0` (eager page mapping) is required on this
   emulator — without it the run dies earlier with `SEGV_ACCERR` on the
   main thread; the fault-handler-based lazy-page path is untested on
   real arm64 hardware.
+- **The app reaches steady state.** `XRE_mainRun` completes end to end:
+  omni.ja component/xpt registration, directory-provider startup, chrome
+  manifest registration, profile prefs, `profile-after-change`, chrome
+  window creation via `nsWindowWatcher::OpenWindow` (`browser.xul`
+  loads — `nsWebShellWindow::JustCreateWebShell` → docshell →
+  `CreateAboutBlankContentViewer` → XPConnect globals wrapped →
+  `loadURI` rv=0), hidden window, `final-ui-startup`,
+  `appstartup-run`, and the Gecko event loop then idles in
+  `epoll_wait`. Verified on cold (`pm clear`) and warm launches; the
+  warm launch renders Top Sites with real bookmark data (profile DB
+  works). Screenshot-verified, not just logcat.
+- The earlier `SIGSEGV@0` in libxul static-init was actually two
+  packaging/config bugs, both now fixed (see below); the stagefright
+  frame turned out to be a red herring (first `.init_array` entry to
+  trip the pref service, not the culprit).
+- Remaining emulator issue (environmental): `system_server` and the app
+  both ANR under ndk_translation load during startup
+  ("Timed out while trying to bind" / broadcast timeouts on
+  `MY_PACKAGE_REPLACED`). The ANR dialogs block input dispatch, so
+  interactive verification (typing a URL, clicking links) is not
+  possible on this emulator. system_server keeps making progress
+  (not deadlocked); a real arm64 device is unlikely to exhibit this.
 - Emulation caveat: everything above runs under ndk_translation
   (arm64→x86_64). `lldb-server`/gdbserver cannot run inside it, so
-  native debugging of the init crash is limited to logcat
-  instrumentation; some remaining crashes may be translation artifacts
-  that do not exist on real arm64 devices.
+  native debugging is limited to logcat instrumentation.
+
+## Runtime root causes found and fixed (this bring-up)
+
+1. **Omnijar never initialized on Android** — `XRE_InitCommandLine` in
+   `toolkit/xre/nsAppRunner.cpp` only calls `mozilla::Omnijar::Init`
+   when `UXP_CUSTOM_OMNI` is set; esr52 processed `-greomni`
+   unconditionally. Without it the gre `omni.ja`'s
+   `chrome.manifest`/`components.manifest`/xpt never register → every
+   XPConnect wrap fails → the first content window cannot be created.
+   Fixed with a `MOZ_WIDGET_ANDROID` conditional (patch 0004).
+2. **`goanna.js` missing from packaged omni.ja** —
+   `mobile/android/installer/package-manifest.in` still listed esr52's
+   `@BINPATH@/greprefs.js`; UXP renamed it to `goanna.js`. The packager
+   only warns about missing manifest entries, so this was silent in the
+   log. Missing goanna.js → `pref_ReadPrefFromJar` fails →
+   `Preferences::Init` fails → `gCacheData`/`gObserverTable` never
+   allocated → `SIGSEGV@0` in `AddBoolVarCache` during
+   `nsIOService::Init`. Fixed by renaming the manifest entry (in
+   `vendor/uxp-android/mobile/android/installer/package-manifest.in`).
 
 ## Unverified / partial (honest caveats)
 
-- **The app does not yet reach XRE/first paint.** It gets as far as
-  libxul's static-initializer phase, then hits the crash described
-  above. Everything past that (nsAppShell, nsWindow, compositor, XUL
-  load, content process) is unverified.
+- **No user interaction verified.** The app reaches steady state and
+  renders, but taps/typing are untested because the emulator's
+  `system_server` ANR dialogs block input dispatch (see above).
+  Actual web page loading from user input is unverified.
+- **Compositor depth is partially verified.** `nsWindow`,
+  `nsAppShell`, and the docshell/viewer path all execute (window
+  creation + `loadURI` succeed), but pixel-level compositing of XUL
+  chrome beyond the first-run/home screens is not yet confirmed.
 - Branding is still Fennec: package `org.mozilla.fennec_ubuntu`,
   label "Fennec", APK filename `fennec-52.6.0.linux-android-aarch64.apk`.
   No Pale Moon branding/product-name pass has been done.
@@ -186,9 +220,10 @@ ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
 - The UI is the **Fennec-derived pm4a mobile frontend** (XUL/XBL chrome:
   `browser.xul` + bindings inside omni.ja) on the full Goanna/UXP
   platform — not the desktop Pale Moon browser chrome. XUL does map to
-  Android here (the XUL/XBL frontend ships and the platform is XUL-based
-  end to end), but whether the Java `GeckoView` glue + `nsWindow`
-  actually instantiate it at runtime is exactly the untested part.
+  Android here: the XUL/XBL frontend ships, its window instantiates at
+  runtime, and the chrome JS runs — the gap to "full Pale Moon UI" is
+  the chrome content itself (mobile chrome vs `browser/` desktop
+  chrome), not the XUL platform.
 - Support-library AAR `extra_jars` that resolve to `None` are still
   filtered in the backend; androidx/Gradle frontend rework not done.
 - `ANDROID_TOOLS` maps to the SDK `emulator/` dir (no `tools/` dir in
@@ -196,21 +231,25 @@ ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
 - Two benign packaging warnings remain: "nothing matches overlay file
   `sync_avatar_default.png`/`sync_promo.png`" — the drawables still land
   in the APK.
+- Crash-path diagnostics remain in the tree (Android-gated):
+  `mozglue/linker/ElfLoader.cpp` (`moz_pmlog` export),
+  `mfbt/Assertions.cpp` (assert → logcat), `memory/mozalloc` abort →
+  logcat. They log only on crashes/fatals and are worth keeping until
+  first interactive use is stable; all temporary instrumentation has
+  been removed.
 
 ## Known missing pieces (next work)
 
-1. **Fix the libxul static-init crash** (null fetch/deref inside
-   `_GLOBAL__sub_I_Unified_cpp_media_libstagefright1.cpp`'s call chain —
-   `AAtomizer` ctor / `initialize_string8`/`initialize_string16` /
-   `__cxa_atexit` wrap). Then continue bring-up to `nsAppShell` →
-   `nsWindow` → compositor → first paint. A real arm64 device (native
-   debugging) may be needed if the next crashes prove to be
-   ndk_translation artifacts rather than code bugs.
+1. **Interactive verification on a real arm64 device** (or a faster
+   emulator host): drive URL loading, link navigation, and page
+   rendering past the home screen; watch for ndk_translation-specific
+   behavior that won't reproduce on hardware.
 2. Pale Moon branding/product pass (app name, package id, APK filename,
    `MOZ_APP_*` branding) — currently Fennec.
 3. Java frontend SDK modernization (targetSdk, Gradle 8, API 34) —
    replace make-driven javac/aapt + support libs with androidx + Gradle.
 4. Desktop Pale Moon browser chrome (`browser/` XUL) on Android, if the
    mobile Fennec chrome is deemed insufficient for the "full Pale Moon
-   UI" goal — large effort; the Fennec chrome is already XUL/XBL.
+   UI" goal — large effort; the Fennec chrome is already XUL/XBL and
+   fully executing.
 5. Release signing path + l10n/crashreporter overrides audit.
