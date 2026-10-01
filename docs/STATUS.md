@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30 (APK installs and launches on an Android 34 emulator; mozglue's custom linker loads libxul + all deps and runs static initializers; currently crashes inside libxul's static-init phase — see below)._
+_Last updated: 2026-10-01 (APK rebranded to **New Moon** — package `org.palemoon.community`, label "New Moon", `newmoon-52.6.0` APK — installs and launches on an Android 34 emulator; `XRE_mainRun` reaches steady state with the Fennec XUL chrome parsed and XBL-cached; content page loads are not yet confirmed to execute — see below)._
 
 ## Verified
 
@@ -37,7 +37,7 @@ _Last updated: 2026-09-30 (APK installs and launches on an Android 34 emulator; 
   `make -C obj-android-aarch64/mobile/android/base FennecJNIWrappers.cpp`
   then `make update-fennec-wrappers`.
 - **`./mach package` produces a signed, installable APK:**
-  `upstream/obj-android-aarch64/dist/fennec-52.6.0.linux-android-aarch64.apk`
+  `upstream/obj-android-aarch64/dist/newmoon-52.6.0.linux-android-aarch64.apk`
   (~33 MB, 1536 entries). Verified by inspection:
   - `lib/arm64-v8a/`: `libmozglue.so`, `libplugin-container.so` (Fennec
     layout: only the custom-linker loader libs live under lib/).
@@ -48,8 +48,8 @@ _Last updated: 2026-09-30 (APK installs and launches on an Android 34 emulator; 
     the full Fennec XUL frontend), 1183 `res/` drawables.
   - `apksigner verify --verbose --print-certs`: **Verifies** with
     v1+v2+v3 schemes (CN=Android Debug cert from `~/.android/debug.keystore`).
-  - aapt badging: package `org.mozilla.fennec_ubuntu`, versionName
-    `52.6.0`, minSdk 15, targetSdk 23.
+  - aapt badging: package `org.palemoon.community`, versionName
+    `52.6.0`, minSdk 15, targetSdk 23; application-label "New Moon".
 
 ## What patch 0003 changes
 
@@ -145,8 +145,10 @@ _Last updated: 2026-09-30 (APK installs and launches on an Android 34 emulator; 
 AVD `nocturne-emu` (google_apis x86_64, abi list includes arm64-v8a via
 ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
 
-- `adb install -r dist/fennec-52.6.0.linux-android-aarch64.apk`: succeeds.
-- `am start -n org.mozilla.fennec_ubuntu/.App`: **the app launches.**
+- `adb install -r dist/newmoon-52.6.0.linux-android-aarch64.apk`: succeeds
+  (`adb install` itself is flaky on this emulator; `adb push` to
+  `/data/local/tmp/` + `pm install -r` is reliable).
+- `am start -n org.palemoon.community/.App`: **the app launches.**
   Java frontend verified working end-to-end: LauncherActivity → BrowserApp,
   profile migration, preferences, network listener, search engine manager,
   and the home screen UI renders (GLES/EGL).
@@ -180,6 +182,22 @@ ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
   interactive verification (typing a URL, clicking links) is not
   possible on this emulator. system_server keeps making progress
   (not deadlocked); a real arm64 device is unlikely to exhibit this.
+- **XUL pipeline verified on-device.** The profile's startupCache
+  contains `xulcache/…/chrome/content/browser.xul` (the chrome XUL was
+  parsed and its prototype cached) plus `xblcache/` entries for toolkit
+  bindings — XUL parsing, the prototype cache, and the XBL binding
+  engine all execute correctly.
+- **Content page loads do not yet complete.** Verified path: a VIEW
+  intent creates a real tab (Java `onTabChanged: ADDED/SELECTED`, URL
+  bar updates, throbber spins, NSS initializes). But the tab's
+  `<browser>` docshell never produces an HTTP transaction: 0 rows in
+  `browser.db` history/visits, empty `cache2/entries`, no sockets, and
+  the new GeckoConsole→logcat bridge is silent. Diagnosis so far: the
+  failure is between `BrowserApp.startup()`/tab-browser creation and
+  `InternalLoad` — `MOZ_LOG` output produces zero bytes even for
+  `all:5`, consistent with the load never starting rather than a
+  logging plumbing bug. Needs either deeper instrumentation or a real
+  arm64 device to separate a code bug from an emulator artifact.
 - Emulation caveat: everything above runs under ndk_translation
   (arm64→x86_64). `lldb-server`/gdbserver cannot run inside it, so
   native debugging is limited to logcat instrumentation.
@@ -213,9 +231,29 @@ ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
   `nsAppShell`, and the docshell/viewer path all execute (window
   creation + `loadURI` succeed), but pixel-level compositing of XUL
   chrome beyond the first-run/home screens is not yet confirmed.
-- Branding is still Fennec: package `org.mozilla.fennec_ubuntu`,
-  label "Fennec", APK filename `fennec-52.6.0.linux-android-aarch64.apk`.
-  No Pale Moon branding/product-name pass has been done.
+- **Rebranded to unofficial "New Moon" identity** (2026-10-01):
+  `MOZ_APP_BASENAME=NewMoon`, `MOZ_APP_VENDOR=Moonchild`,
+  `ANDROID_PACKAGE_NAME=org.palemoon.community`, display name
+  "New Moon" — per Pale Moon's TRADEMARK notice, official "Pale Moon"
+  branding requires Moonchild permission and this is a community port.
+  `MOZ_APP_ID` now uses Pale Moon's real GUID
+  `{8de7fcbb-c55c-4fbe-bfc5-fc555c87dbc4}` + `UXP_APPCOMPAT_GUID=1` so
+  Pale Moon-targeted extensions/themes install without compat hacks;
+  `MOZ_APP_UA_NAME=Palemoon`. New branding dir
+  `vendor/uxp-android/mobile/android/branding/newmoon/` with generated
+  crescent-moon launcher/favicon/about assets. Verified in the built
+  APK: aapt badging `org.palemoon.community` / label "New Moon",
+  brand.properties in omni.ja.
+  **Gotcha:** after changing `confvars.sh`, `mobile/android/base`
+  generated sources regenerate but `classes.dex` can stay stale —
+  `javac` constant-folds `AppConstants.ANDROID_PACKAGE_NAME` into
+  `content://` URIs, and a stale fold produced
+  `content://org.mozilla.fennec_ubuntu.db.browser` SecurityExceptions
+  on first launch (provider permission denials, fatal
+  `GeckoBackgroundThread` crash). Fix: delete
+  `objdir/mobile/android/base/{generated,*classes*,*.jar,classes.dex}`
+  and rebuild + repackage. Verified: 0 `fennec_ubuntu` literals in the
+  new dex, clean launch under pid of the new package.
 - Signed with the auto-generated **debug** key only.
 - The UI is the **Fennec-derived pm4a mobile frontend** (XUL/XBL chrome:
   `browser.xul` + bindings inside omni.ja) on the full Goanna/UXP
@@ -244,8 +282,10 @@ ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
    emulator host): drive URL loading, link navigation, and page
    rendering past the home screen; watch for ndk_translation-specific
    behavior that won't reproduce on hardware.
-2. Pale Moon branding/product pass (app name, package id, APK filename,
-   `MOZ_APP_*` branding) — currently Fennec.
+2. ~~Pale Moon branding/product pass~~ — done (unofficial "New Moon"
+   branding + Pale Moon app GUID/UA); official "Pale Moon" branding
+   needs Moonchild's permission and remains available via
+   `MOZ_OFFICIAL_BRANDING_DIRECTORY`.
 3. Java frontend SDK modernization (targetSdk, Gradle 8, API 34) —
    replace make-driven javac/aapt + support libs with androidx + Gradle.
 4. Desktop Pale Moon browser chrome (`browser/` XUL) on Android, if the

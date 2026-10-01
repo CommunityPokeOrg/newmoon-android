@@ -1298,6 +1298,36 @@ index 059fa85100..701ed7baec 100644
  
  #define NS_IWIDGET_IID \
  { 0x06396bf6, 0x2dd8, 0x45e5, \
+diff --git a/xpcom/base/nsConsoleService.cpp b/xpcom/base/nsConsoleService.cpp
+index 761bcc79b3..4edb30f380 100644
+--- a/xpcom/base/nsConsoleService.cpp
++++ b/xpcom/base/nsConsoleService.cpp
+@@ -29,6 +29,10 @@
+ #include <windows.h>
+ #endif
+ 
++#ifdef ANDROID
++#include <android/log.h>
++#endif
++
+ #ifdef MOZ_TASK_TRACER
+ #include "GeckoTaskTracer.h"
+ using namespace mozilla::tasktracer;
+@@ -246,6 +250,14 @@ nsConsoleService::LogMessageWithMode(nsIConsoleMessage* aMessage,
+       }
+     }
+ #endif
++#ifdef ANDROID
++    {
++      nsCString msg;
++      aMessage->ToString(msg);
++      __android_log_print(ANDROID_LOG_INFO, "GeckoConsole", "%s",
++                          msg.get());
++    }
++#endif
+ 
+     if (sLoggingBuffered) {
+       MessageElement* e = new MessageElement(aMessage);
 diff --git a/xpcom/build/BinaryPath.h b/xpcom/build/BinaryPath.h
 index 6c2622a557..fc05110951 100644
 --- a/xpcom/build/BinaryPath.h

@@ -2,15 +2,18 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-MOZ_APP_BASENAME=Fennec
-MOZ_APP_VENDOR=Mozilla
+MOZ_APP_BASENAME=NewMoon
+MOZ_APP_VENDOR=Moonchild
 MOZ_FENNEC=1
+# Pale Moon/UXP family extensions resolve app-compat via
+# extensions.guid.appCompatId (see toolkit/mozapps/extensions).
+UXP_APPCOMPAT_GUID=1
 
 MOZ_APP_VERSION=`cat ${_topsrcdir}/$MOZ_BUILD_APP/config/version.txt`
 MOZ_APP_VERSION_DISPLAY=`cat ${_topsrcdir}/$MOZ_BUILD_APP/config/version_display.txt`
-MOZ_APP_UA_NAME=Firefox
+MOZ_APP_UA_NAME=Palemoon
 
-MOZ_BRANDING_DIRECTORY=mobile/android/branding/unofficial
+MOZ_BRANDING_DIRECTORY=mobile/android/branding/newmoon
 MOZ_OFFICIAL_BRANDING_DIRECTORY=mobile/android/branding/official
 # MOZ_APP_DISPLAYNAME is set by branding/configure.sh
 
@@ -35,7 +38,9 @@ MOZ_RAW=1
 # use custom widget for html:select
 MOZ_USE_NATIVE_POPUP_WINDOWS=1
 
-MOZ_APP_ID={aa3c5121-dab2-40e2-81ca-7ea25febc110}
+# Use the Pale Moon application GUID so UXP/Goanna extensions and themes
+# that target Pale Moon ({8de7fcbb-...}) install without compat hacks.
+MOZ_APP_ID={8de7fcbb-c55c-4fbe-bfc5-fc555c87dbc4}
 
 MOZ_APP_STATIC_INI=1
 
