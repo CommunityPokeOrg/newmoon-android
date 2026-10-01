@@ -28,3 +28,7 @@ mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/../obj-android-aarch64
 ac_add_options --disable-pulseaudio
 ac_add_options --disable-alsa
 ac_add_options --disable-printing
+
+# Android 15+/16 KB page-size devices (e.g. Pixel 9/10 on 16 KB kernels)
+# reject 4 KB-aligned LOAD segments in system-loaded .so files.
+export LDFLAGS="-Wl,-z,max-page-size=16384"

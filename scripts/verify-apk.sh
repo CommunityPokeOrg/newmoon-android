@@ -19,6 +19,8 @@ unzip -qq "$APK" '*.so' -d "$tmp" 2>/dev/null || true
 echo "== ELF LOAD alignment (need >= 0x4000 on 16 KB devices) =="
 bad=0
 while IFS= read -r so; do
+    # assets/*.so are szip-packed (mozglue custom linker), not raw ELF — skip them.
+    [ "$(head -c4 "$so")" = "$(printf '\177ELF')" ] || { printf '%-60s (szip-packed, skipped)\n' "${so#$tmp/}"; continue; }
     align=$($ANDROID_SDK_ROOT/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -lW "$so" 2>/dev/null \
         | awk '/LOAD/ {print $NF}' | sort -u | tr '\n' ' ')
     printf '%-60s align: %s\n' "${so#$tmp/}" "$align"
