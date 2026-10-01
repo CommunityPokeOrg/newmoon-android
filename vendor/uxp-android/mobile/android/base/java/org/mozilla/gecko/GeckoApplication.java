@@ -135,6 +135,8 @@ public class GeckoApplication extends Application
     }
 
     public void onActivityResume(GeckoActivityStatus activity) {
+        AppCrashLogger.markUiReady(this);
+
         if (mPausedGecko) {
             GeckoThread.onResume();
             mPausedGecko = false;
@@ -154,6 +156,10 @@ public class GeckoApplication extends Application
 
     @Override
     public void onCreate() {
+        // First: record crashes that kill the process before or during
+        // Gecko/Goanna/UI startup so a report survives to the next launch.
+        AppCrashLogger.install(this);
+
         Log.i(LOG_TAG, "zerdatime " + SystemClock.uptimeMillis() + " - Fennec application start");
 
         mRefWatcher = LeakCanary.install(this);

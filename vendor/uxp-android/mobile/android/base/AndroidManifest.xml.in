@@ -278,6 +278,21 @@
                   android:authorities="@ANDROID_PACKAGE_NAME@.partnerbookmarks"
                   android:exported="false"/>
 
+        <!-- Shares saved crash reports (see AppCrashLogger) through a secure
+             content:// URI; never exported. -->
+        <activity android:name="org.mozilla.gecko.CrashReportShareActivity"
+                  android:theme="@android:style/Theme.Translucent.NoTitleBar"
+                  android:excludeFromRecents="true"
+                  android:exported="false" />
+
+        <provider android:name="android.support.v4.content.FileProvider"
+                  android:authorities="@ANDROID_PACKAGE_NAME@.fileprovider"
+                  android:exported="false"
+                  android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                       android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- Share overlay activity
 
              Setting launchMode="singleTop" ensures onNewIntent is called when the Activity is
