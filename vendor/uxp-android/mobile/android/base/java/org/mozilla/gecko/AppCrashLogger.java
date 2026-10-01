@@ -74,6 +74,8 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
     private static final String REPORT_DIR = "crash-reports";
     private static final String MARKER_FILE = "session-started";
     private static final String SURFACED_FILE = "surfaced";
+    private static final String EXIT_SEEN_FILE = "exit-seen";
+    private static final String REPORTER_SUFFIX = ":reporter";
     private static final String CHANNEL_ID = "crash_reports";
     private static final int NOTIFICATION_ID = 0x43524153; // "CRAS"
     private static final String DOWNLOADS_SUBDIR = "NewMoon";
@@ -108,6 +110,13 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
             ensureOutermost(appContext);
             return;
         }
+        if (isReporterProcess(appContext)) {
+            // The :reporter process exists only to watch the main process; it
+            // must not start the watcher again or write session markers.
+            sInstalled = true;
+            ensureOutermost(appContext);
+            return;
+        }
         try {
             File dir = getReportDir(appContext);
 
@@ -131,12 +140,161 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
         sInstalled = true;
         ensureOutermost(appContext);
 
+        // Start the :reporter watchdog BEFORE anything else can kill us: it
+        // lives in its own process and observes the main process's death
+        // (pid liveness plus ApplicationExitInfo on API 30+), writing a
+        // report even when this process never gets as far as onCreate.
+        try {
+            Intent watch = new Intent(appContext, CrashWatchService.class)
+                .putExtra(CrashWatchService.EXTRA_MAIN_PID,
+                          android.os.Process.myPid());
+            appContext.startService(watch);
+        } catch (Throwable t) {
+            Log.w(LOGTAG, "Could not start crash watch service", t);
+        }
+
+        try {
+            // Even without a stale marker (post-UI native death), surface any
+            // crash-reason process exit recorded since last seen.
+            reportNewCrashExits(appContext);
+        } catch (Throwable t) {
+            Log.w(LOGTAG, "Exit-history check failed", t);
+        }
+
         try {
             mirrorReportsToUserDir(appContext);
         } catch (Throwable t) {
             Log.w(LOGTAG, "Report mirroring failed", t);
         }
         surfaceReportsIfAny(appContext);
+    }
+
+    /**
+     * True when running inside the :reporter watchdog process.
+     */
+    static boolean isReporterProcess(Context context) {
+        try {
+            String expected = context.getPackageName() + REPORTER_SUFFIX;
+            String name = null;
+            if (Build.VERSION.SDK_INT >= 28) {
+                name = android.app.Application.getProcessName();
+            } else {
+                FileInputStream in = null;
+                try {
+                    in = new FileInputStream("/proc/self/cmdline");
+                    byte[] buf = new byte[256];
+                    int n = in.read(buf);
+                    if (n > 0) {
+                        int len = 0;
+                        while (len < n && buf[len] != 0) {
+                            len++;
+                        }
+                        name = new String(buf, 0, len, "UTF-8");
+                    }
+                } finally {
+                    if (in != null) {
+                        try { in.close(); } catch (Throwable t) { }
+                    }
+                }
+            }
+            return expected.equals(name);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * On launch, convert any crash-reason ApplicationExitInfo record newer
+     * than the last-seen watermark into an exit-*.txt report. Covers deaths
+     * that happen after the session marker was cleanly cleared.
+     */
+    private static void reportNewCrashExits(Context context) {
+        if (Build.VERSION.SDK_INT < 30) {
+            return;
+        }
+        ActivityManager am =
+            (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+        java.util.List<?> exits =
+            am.getHistoricalProcessExitReasons(context.getPackageName(), 0, 10);
+        if (exits == null || exits.isEmpty()) {
+            return;
+        }
+        long seen = 0;
+        String w = readSmallFile(new File(getReportDir(context), EXIT_SEEN_FILE));
+        if (w != null) {
+            try {
+                seen = Long.parseLong(w.trim());
+            } catch (NumberFormatException e) {
+                // Treat as no watermark.
+            }
+        }
+        long latest = seen;
+        for (Object o : exits) {
+            android.app.ApplicationExitInfo info = (android.app.ApplicationExitInfo) o;
+            if (info.getTimestamp() > latest) {
+                latest = info.getTimestamp();
+            }
+            if (info.getTimestamp() <= seen || isBenignExitReason(info.getReason())) {
+                continue;
+            }
+            writeExitReport(context, info);
+        }
+        writeSmallFile(new File(getReportDir(context), EXIT_SEEN_FILE),
+                       String.valueOf(latest));
+    }
+
+    static boolean isBenignExitReason(int reason) {
+        switch (reason) {
+            case 1:  // EXIT_SELF
+            case 3:  // LOW_MEMORY
+            case 8:  // PERMISSION_CHANGE
+            case 9:  // EXCESSIVE_RESOURCE_USAGE
+            case 10: // USER_REQUESTED
+            case 11: // USER_STOPPED
+            case 14: // FREEZER
+            case 15: // PACKAGE_STATE
+            case 16: // PACKAGE_UPDATED
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Report file for a process exit recorded by the system.
+     */
+    static void writeExitReport(Context context, android.app.ApplicationExitInfo info) {
+        StringBuilder body = new StringBuilder();
+        appendHeader(context, body);
+        body.append('\n');
+        body.append("=== Process exit recorded by the system ===\n");
+        body.append("Process: ").append(info.getProcessName())
+            .append(" pid=").append(info.getPid()).append('\n')
+            .append("Time: ").append(iso(info.getTimestamp())).append('\n')
+            .append("Reason: ").append(info.getReason())
+            .append('(').append(exitReasonName(info.getReason())).append(')')
+            .append(" status=").append(info.getStatus())
+            .append(" importance=").append(info.getImportance()).append('\n');
+        String desc = info.getDescription();
+        if (desc != null) {
+            body.append("Description: ").append(desc).append('\n');
+        }
+        String trace = readTraceStream(info);
+        if (trace != null && trace.length() > 0) {
+            body.append("\n=== Trace / tombstone ===\n");
+            body.append(trace).append('\n');
+        }
+        body.append('\n');
+        body.append("=== Logcat tail ===\n");
+        body.append(readLogcat());
+        File report = writeReport(context, "exit", body.toString());
+        if (report != null) {
+            try {
+                mirrorReportToUserDir(context, report);
+            } catch (Throwable t) {
+                // Best effort.
+            }
+        }
     }
 
     /**
@@ -256,7 +414,8 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
     }
 
     static boolean isReportName(String name) {
-        return (name.startsWith("crash-") || name.startsWith("startup-"))
+        return (name.startsWith("crash-") || name.startsWith("startup-")
+                || name.startsWith("watch-") || name.startsWith("exit-"))
             && name.endsWith(".txt");
     }
 
@@ -343,7 +502,7 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
         }
     }
 
-    private static void appendHeader(Context context, StringBuilder body) {
+    static void appendHeader(Context context, StringBuilder body) {
         body.append("New Moon crash report\n");
         body.append("=====================\n");
         body.append("Reported at: ").append(nowIso()).append('\n');
@@ -379,7 +538,7 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
      * ApplicationExitInfo (API 30+): reason codes and, for native crashes, the
      * system tombstone for our own process. Unavailable/absent on older APIs.
      */
-    private static void appendExitInfo(Context context, StringBuilder body) {
+    static void appendExitInfo(Context context, StringBuilder body) {
         if (Build.VERSION.SDK_INT < 30) {
             body.append("ApplicationExitInfo requires API 30+\n");
             return;
@@ -422,7 +581,7 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
         }
     }
 
-    private static String exitReasonName(int reason) {
+    static String exitReasonName(int reason) {
         switch (reason) {
             case 1: return "EXIT_SELF";
             case 2: return "SIGNALED";
@@ -441,7 +600,7 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
         }
     }
 
-    private static String readTraceStream(android.app.ApplicationExitInfo info) {
+    static String readTraceStream(android.app.ApplicationExitInfo info) {
         if (Build.VERSION.SDK_INT < 30) {
             return null;
         }
@@ -451,15 +610,20 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
             if (in == null) {
                 return null;
             }
+            java.io.ByteArrayOutputStream raw = new java.io.ByteArrayOutputStream();
             byte[] buf = new byte[4096];
-            int total = 0;
-            StringBuilder sb = new StringBuilder();
             int n;
-            while ((n = in.read(buf)) > 0 && total < MAX_TOMBSTONE_BYTES) {
-                sb.append(new String(buf, 0, n, "UTF-8"));
-                total += n;
+            while ((n = in.read(buf)) > 0 && raw.size() < MAX_TOMBSTONE_BYTES) {
+                raw.write(buf, 0, n);
             }
-            return sb.toString();
+            byte[] bytes = raw.toByteArray();
+            if (looksBinary(bytes)) {
+                // Android 14+ stores tombstones as protobuf; keep the
+                // printable runs (signal, symbols, lib paths) readable.
+                return "(binary tombstone — printable strings extracted)\n"
+                       + extractPrintable(bytes);
+            }
+            return new String(bytes, "UTF-8");
         } catch (Throwable t) {
             return null;
         } finally {
@@ -469,11 +633,42 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
         }
     }
 
+    private static boolean looksBinary(byte[] bytes) {
+        int check = Math.min(bytes.length, 2048);
+        int bad = 0;
+        for (int i = 0; i < check; i++) {
+            byte b = bytes[i];
+            if (b != '\n' && b != '\r' && b != '\t' && (b < 0x20 || b > 0x7e)) {
+                bad++;
+            }
+        }
+        return check > 0 && bad * 10 > check;
+    }
+
+    private static String extractPrintable(byte[] bytes) {
+        StringBuilder out = new StringBuilder(bytes.length / 2);
+        StringBuilder run = new StringBuilder();
+        for (byte b : bytes) {
+            if (b >= 0x20 && b <= 0x7e) {
+                run.append((char) b);
+            } else {
+                if (run.length() >= 4) {
+                    out.append(run).append('\n');
+                }
+                run.setLength(0);
+            }
+        }
+        if (run.length() >= 4) {
+            out.append(run);
+        }
+        return out.toString();
+    }
+
     /**
      * Apps may read their own log records without any permission since API 16;
      * other buffers simply come back empty. Bounded tail only.
      */
-    private static String readLogcat() {
+    static String readLogcat() {
         Process process = null;
         BufferedReader reader = null;
         try {
@@ -693,7 +888,7 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
 
     // ---------- small helpers ----------
 
-    private static File writeReport(Context context, String prefix, String text) {
+    static File writeReport(Context context, String prefix, String text) {
         FileWriter w = null;
         try {
             String name = prefix + "-" + System.currentTimeMillis() + ".txt";
@@ -726,7 +921,7 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
         }
     }
 
-    private static void writeSmallFile(File file, String text) {
+    static void writeSmallFile(File file, String text) {
         FileWriter w = null;
         try {
             w = new FileWriter(file);
@@ -740,7 +935,7 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
         }
     }
 
-    private static String readSmallFile(File file) {
+    static String readSmallFile(File file) {
         FileInputStream in = null;
         try {
             in = new FileInputStream(file);
@@ -756,11 +951,11 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
         }
     }
 
-    private static String nowIso() {
+    static String nowIso() {
         return iso(System.currentTimeMillis());
     }
 
-    private static String iso(long epochMs) {
+    static String iso(long epochMs) {
         SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US);
         fmt.setTimeZone(TimeZone.getTimeZone("UTC"));
         return fmt.format(new Date(epochMs));

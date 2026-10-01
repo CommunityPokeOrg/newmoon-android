@@ -46,6 +46,12 @@
     <!-- Tab Queue -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
+    <!-- Crash reporting: harmless to request; not granted to normal apps at
+         install time, but CAN be granted via `pm grant` over adb, which lets
+         the in-app crash logger include full system logcat instead of only
+         our own uid's entries. -->
+    <uses-permission android:name="android.permission.READ_LOGS"/>
+
 #ifdef MOZ_ANDROID_BEAM
     <!-- Android Beam support -->
     <uses-permission android:name="android.permission.NFC"/>

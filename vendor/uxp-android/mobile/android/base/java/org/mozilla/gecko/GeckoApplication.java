@@ -163,6 +163,14 @@ public class GeckoApplication extends Application
         // No-op if attachBaseContext already installed it.
         AppCrashLogger.install(this);
 
+        if (AppCrashLogger.isReporterProcess(this)) {
+            // The :reporter process only hosts CrashWatchService; skip the
+            // heavyweight Gecko/LeakCanary init so it stays cheap to keep
+            // alive and can't crash on Gecko load itself.
+            super.onCreate();
+            return;
+        }
+
         Log.i(LOG_TAG, "zerdatime " + SystemClock.uptimeMillis() + " - Fennec application start");
 
         mRefWatcher = LeakCanary.install(this);

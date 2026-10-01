@@ -278,6 +278,13 @@
                   android:authorities="@ANDROID_PACKAGE_NAME@.partnerbookmarks"
                   android:exported="false"/>
 
+        <!-- Watchdog in its own process: observes main-process death even
+             when the process dies before Java crash handlers or the report
+             viewer can run (see CrashWatchService). -->
+        <service android:name="org.mozilla.gecko.CrashWatchService"
+                 android:process=":reporter"
+                 android:exported="false" />
+
         <!-- In-app crash report viewer (see AppCrashLogger); never exported. -->
         <activity android:name="org.mozilla.gecko.CrashReportViewerActivity"
                   android:theme="@android:style/Theme.Light"
