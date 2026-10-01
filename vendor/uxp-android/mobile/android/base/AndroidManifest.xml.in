@@ -278,10 +278,9 @@
                   android:authorities="@ANDROID_PACKAGE_NAME@.partnerbookmarks"
                   android:exported="false"/>
 
-        <!-- Shares saved crash reports (see AppCrashLogger) through a secure
-             content:// URI; never exported. -->
-        <activity android:name="org.mozilla.gecko.CrashReportShareActivity"
-                  android:theme="@android:style/Theme.Translucent.NoTitleBar"
+        <!-- In-app crash report viewer (see AppCrashLogger); never exported. -->
+        <activity android:name="org.mozilla.gecko.CrashReportViewerActivity"
+                  android:theme="@android:style/Theme.Light"
                   android:excludeFromRecents="true"
                   android:exported="false" />
 

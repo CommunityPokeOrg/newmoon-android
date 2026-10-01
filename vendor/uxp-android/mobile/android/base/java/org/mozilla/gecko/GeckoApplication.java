@@ -152,12 +152,15 @@ public class GeckoApplication extends Application
     protected void attachBaseContext(Context base) {
         super.attachBaseContext(base);
         AppConstants.maybeInstallMultiDex(base);
+        // Earliest viable hook (right after multidex): record crashes that
+        // kill the process before or during Gecko/Goanna/UI startup so a
+        // report survives to the next launch.
+        AppCrashLogger.install(base);
     }
 
     @Override
     public void onCreate() {
-        // First: record crashes that kill the process before or during
-        // Gecko/Goanna/UI startup so a report survives to the next launch.
+        // No-op if attachBaseContext already installed it.
         AppCrashLogger.install(this);
 
         Log.i(LOG_TAG, "zerdatime " + SystemClock.uptimeMillis() + " - Fennec application start");
