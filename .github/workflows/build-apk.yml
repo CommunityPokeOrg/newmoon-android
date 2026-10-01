@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     env:
-      ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME || '/usr/local/lib/android/sdk' }}
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_NDK: /usr/local/lib/android/sdk/ndk/27.2.12479018
 
