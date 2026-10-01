@@ -248,6 +248,10 @@ pref("extensions.webextensions.default-content-security-policy", "script-src 'se
 pref("dom.disable_open_during_load", true);
 pref("privacy.popups.showBrowserMessage", true);
 
+/* tracking protection defaults off; the chrome reads these unconditionally */
+pref("privacy.trackingprotection.enabled", false);
+pref("privacy.trackingprotection.pbmode.enabled", true);
+
 /* disable opening windows with the dialog feature */
 pref("dom.disable_window_open_dialog_feature", true);
 pref("dom.disable_window_showModalDialog", true);

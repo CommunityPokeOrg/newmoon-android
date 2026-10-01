@@ -289,7 +289,7 @@
 @BINPATH@/components/nsLoginInfo.js
 @BINPATH@/components/nsLoginManager.js
 @BINPATH@/components/nsLoginManagerPrompter.js
-@BINPATH@/components/storage-mozStorage.js
+@BINPATH@/components/storage-json.js
 @BINPATH@/components/crypto-SDR.js
 @BINPATH@/components/TooltipTextProvider.js
 @BINPATH@/components/TooltipTextProvider.manifest
@@ -306,6 +306,7 @@
 @BINPATH@/components/amWebAPI.js
 @BINPATH@/components/amWebInstallListener.js
 @BINPATH@/components/nsBlocklistService.js
+@BINPATH@/components/blocklist.manifest
 #ifndef RELEASE_OR_BETA
 @BINPATH@/components/TabSource.js
 #endif

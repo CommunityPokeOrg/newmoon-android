@@ -91,8 +91,26 @@ XPCOMUtils.defineLazyServiceGetter(this, "Profiler",
                                    "@mozilla.org/tools/profiler;1",
                                    "nsIProfiler");
 
-XPCOMUtils.defineLazyModuleGetter(this, "SimpleServiceDiscovery",
-                                  "resource://gre/modules/SimpleServiceDiscovery.jsm");
+XPCOMUtils.defineLazyGetter(this, "SimpleServiceDiscovery", function () {
+  try {
+    return Cu.import("resource://gre/modules/SimpleServiceDiscovery.jsm", {}).
+             SimpleServiceDiscovery;
+  } catch (e) {
+    /* Casting discovery is not part of this build; keep the API surface so
+     * CastingApps and friends degrade to no-ops instead of throwing. */
+    return {
+      services: [],
+      addService: function () {},
+      updateService: function () {},
+      removeService: function () {},
+      registerDevice: function () {},
+      addExternalDiscovery: function () {},
+      findServiceForID: function () { return null; },
+      findAppForService: function () { return null; },
+      search: function () { return 0; },
+    };
+  }
+});
 
 XPCOMUtils.defineLazyModuleGetter(this, "CharsetMenu",
                                   "resource://gre/modules/CharsetMenu.jsm");
@@ -496,7 +514,7 @@ var BrowserApp = {
       BrowserApp.deck.removeEventListener("DOMContentLoaded", BrowserApp_delayedStartup, false);
 
       InitLater(() => Cu.import("resource://gre/modules/NotificationDB.jsm"));
-      InitLater(() => Cu.import("resource://gre/modules/PresentationDeviceInfoManager.jsm"));
+      InitLater(() => { try { Cu.import("resource://gre/modules/PresentationDeviceInfoManager.jsm"); } catch (e) {} });
 
       InitLater(() => Services.obs.notifyObservers(window, "browser-delayed-startup-finished", ""));
       InitLater(() => Messaging.sendRequest({ type: "Gecko:DelayedStartup" }));
@@ -1758,7 +1776,7 @@ var BrowserApp = {
         break;
 
       case "Passwords:Init": {
-        let storage = Cc["@mozilla.org/login-manager/storage/mozStorage;1"].
+        let storage = Cc["@mozilla.org/login-manager/storage/json;1"].
                       getService(Ci.nsILoginManagerStorage);
         storage.initialize();
         Services.obs.removeObserver(this, "Passwords:Init");

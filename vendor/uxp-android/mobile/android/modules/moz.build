@@ -28,5 +28,6 @@ EXTRA_JS_MODULES += [
     'Snackbars.jsm',
     'SSLExceptions.jsm',
     'TabMirror.jsm',
+    'UITelemetry.jsm',
     'WebsiteMetadata.jsm'
 ]

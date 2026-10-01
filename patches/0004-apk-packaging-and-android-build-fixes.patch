@@ -237,6 +237,136 @@ index cb9dbaad51..d8538549cf 100644
  typedef intptr_t NativeWindowHandle; // never actually used, will always be 0
  #else
  #error Need NativeWindowHandle for this platform
+diff --git a/dom/xul/XULDocument.cpp b/dom/xul/XULDocument.cpp
+index 1c07d144b0..f1b4ef058c 100644
+--- a/dom/xul/XULDocument.cpp
++++ b/dom/xul/XULDocument.cpp
+@@ -136,6 +136,13 @@ int32_t XULDocument::gRefCnt = 0;
+ 
+ LazyLogModule XULDocument::gXULLog("XULDocument");
+ 
++#ifdef ANDROID
++#include <android/log.h>
++#define PM_XULLOG(...) __android_log_print(ANDROID_LOG_INFO, "PMXUL", __VA_ARGS__)
++#else
++#define PM_XULLOG(...)
++#endif
++
+ //----------------------------------------------------------------------
+ 
+ struct BroadcastListener {
+@@ -238,6 +245,7 @@ XULDocument::~XULDocument()
+ nsresult
+ NS_NewXULDocument(nsIXULDocument** result)
+ {
++    PM_XULLOG("NS_NewXULDocument");
+     NS_PRECONDITION(result != nullptr, "null ptr");
+     if (! result)
+         return NS_ERROR_NULL_POINTER;
+@@ -364,6 +372,14 @@ XULDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
+                                nsIStreamListener **aDocListener,
+                                bool aReset, nsIContentSink* aSink)
+ {
++    {
++        nsCOMPtr<nsIURI> pmuri;
++        if (NS_SUCCEEDED(aChannel->GetOriginalURI(getter_AddRefs(pmuri))) && pmuri) {
++            nsAutoCString pmspec;
++            pmuri->GetSpec(pmspec);
++            PM_XULLOG("StartDocumentLoad %s", pmspec.get());
++        }
++    }
+     if (MOZ_LOG_TEST(gXULLog, LogLevel::Warning)) {
+ 
+         nsCOMPtr<nsIURI> uri;
+@@ -416,6 +432,7 @@ XULDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
+     //        loading chrome for the profile manager itself). This must be
+     //        parsed from disk.
+ 
++    PM_XULLOG("StartDocumentLoad proto=%p", (void*)proto);
+     if (proto) {
+         // If we're racing with another document to load proto, wait till the
+         // load has finished loading before trying to add cloned style sheets.
+@@ -461,6 +478,7 @@ XULDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
+ 
+         *aDocListener = listener;
+ 
++        PM_XULLOG("StartDocumentLoad calling parser->Parse");
+         parser->Parse(mDocumentURI);
+ 
+         // Put the current prototype, created under PrepareToLoad, into the
+@@ -481,6 +499,7 @@ XULDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
+ void
+ XULDocument::EndLoad()
+ {
++    PM_XULLOG("EndLoad proto=%p", (void*)mCurrentPrototype);
+     // This can happen if an overlay fails to load
+     if (!mCurrentPrototype)
+         return;
+@@ -557,6 +576,7 @@ XULDocument::EndLoad()
+ NS_IMETHODIMP
+ XULDocument::OnPrototypeLoadDone(bool aResumeWalk)
+ {
++    PM_XULLOG("OnPrototypeLoadDone resume=%d", (int)aResumeWalk);
+     nsresult rv;
+ 
+     // Add the style overlays from chrome registry, if any.
+@@ -2676,6 +2696,8 @@ XULDocument::LoadOverlayInternal(nsIURI* aURI, bool aIsDynamic,
+ nsresult
+ XULDocument::ResumeWalk()
+ {
++    PM_XULLOG("ResumeWalk state=%d depth=%d", (int)mState,
++              (int)mContextStack.Depth());
+     // Walk the prototype and build the delegate content model. The
+     // walk is performed in a top-down, left-to-right fashion. That
+     // is, a parent is built before any of its children; a node is
+@@ -2957,6 +2979,8 @@ XULDocument::ResumeWalk()
+ nsresult
+ XULDocument::DoneWalking()
+ {
++    PM_XULLOG("DoneWalking pendingSheets=%d loaded=%d", (int)mPendingSheets,
++              (int)mDocumentLoaded);
+     NS_PRECONDITION(mPendingSheets == 0, "there are sheets to be loaded");
+     NS_PRECONDITION(!mStillWalking, "walk not done");
+ 
+@@ -3475,12 +3499,15 @@ XULDocument::OnScriptCompileComplete(JSScript* aScript, nsresult aStatus)
+ nsresult
+ XULDocument::ExecuteScript(nsXULPrototypeScript *aScript)
+ {
++    PM_XULLOG("ExecuteScript proto=%p sgo=%p", (void*)aScript,
++              (void*)mScriptGlobalObject.get());
+     NS_PRECONDITION(aScript != nullptr, "null ptr");
+     NS_ENSURE_TRUE(aScript, NS_ERROR_NULL_POINTER);
+     NS_ENSURE_TRUE(mScriptGlobalObject, NS_ERROR_NOT_INITIALIZED);
+ 
+     nsresult rv;
+     rv = mScriptGlobalObject->EnsureScriptEnvironment();
++    if (NS_FAILED(rv)) { PM_XULLOG("EnsureScriptEnvironment rv=%x", (unsigned)rv); }
+     NS_ENSURE_SUCCESS(rv, rv);
+ 
+     // Execute the precompiled script with the given version
+@@ -3495,7 +3522,11 @@ XULDocument::ExecuteScript(nsXULPrototypeScript *aScript)
+     NS_ENSURE_TRUE(scriptObject, NS_ERROR_UNEXPECTED);
+ 
+     JS::Rooted<JSObject*> baseGlobal(cx, JS::CurrentGlobalOrNull(cx));
+-    NS_ENSURE_TRUE(xpc::Scriptability::Get(baseGlobal).Allowed(), NS_OK);
++    bool pmAllowed = xpc::Scriptability::Get(baseGlobal).Allowed();
++    PM_XULLOG("ExecuteScript scriptability=%d global=%p script=%p",
++              (int)pmAllowed, (void*)baseGlobal.get(),
++              (void*)scriptObject.get());
++    NS_ENSURE_TRUE(pmAllowed, NS_OK);
+ 
+     JSAddonId* addonId = mCurrentPrototype ? MapURIToAddonID(mCurrentPrototype->GetURI()) : nullptr;
+     JS::Rooted<JSObject*> global(cx, xpc::GetAddonScope(cx, baseGlobal, addonId));
+@@ -3508,7 +3539,8 @@ XULDocument::ExecuteScript(nsXULPrototypeScript *aScript)
+     // and execute it. On failure, ~AutoScriptEntry will handle exceptions, so
+     // there is no need to manually check the return value.
+     JS::RootedValue rval(cx);
+-    JS::CloneAndExecuteScript(cx, scriptObject, &rval);
++    bool pmOk = JS::CloneAndExecuteScript(cx, scriptObject, &rval);
++    PM_XULLOG("CloneAndExecuteScript ok=%d", (int)pmOk);
+ 
+     return NS_OK;
+ }
 diff --git a/gfx/cairo/cairo/src/moz.build b/gfx/cairo/cairo/src/moz.build
 index 34587ade8d..5d712abce2 100644
 --- a/gfx/cairo/cairo/src/moz.build
@@ -447,6 +577,214 @@ index 5aa061fee6..742d1a3832 100644
  
  SharedMemoryHandle SharedMemory::handle() const {
    return FileDescriptor(mapped_file_, false);
+diff --git a/js/xpconnect/loader/mozJSComponentLoader.cpp b/js/xpconnect/loader/mozJSComponentLoader.cpp
+index 86dadc37bb..7735904bc8 100644
+--- a/js/xpconnect/loader/mozJSComponentLoader.cpp
++++ b/js/xpconnect/loader/mozJSComponentLoader.cpp
+@@ -60,6 +60,13 @@ static const char kXPConnectServiceContractID[] = "@mozilla.org/js/xpc/XPConnect
+ static const char kObserverServiceContractID[] = "@mozilla.org/observer-service;1";
+ static const char kJSCachePrefix[] = "jsloader";
+ 
++#ifdef ANDROID
++#include <android/log.h>
++#define PM_JCLLOG(...) __android_log_print(ANDROID_LOG_INFO, "PMJCL", __VA_ARGS__)
++#else
++#define PM_JCLLOG(...)
++#endif
++
+ #define HAVE_PR_MEMMAP
+ 
+ /**
+@@ -352,12 +359,14 @@ mozJSComponentLoader::LoadModule(FileLocation& aFile)
+ 
+     nsCString spec;
+     aFile.GetURIString(spec);
++    PM_JCLLOG("LoadModule %s", spec.get());
+     ComponentLoaderInfo info(spec);
+     nsresult rv = info.EnsureURI();
+     NS_ENSURE_SUCCESS(rv, nullptr);
+ 
+     if (!mInitialized) {
+         rv = ReallyInit();
++        PM_JCLLOG("ReallyInit rv=%x", (unsigned)rv);
+         if (NS_FAILED(rv))
+             return nullptr;
+     }
+@@ -374,6 +383,8 @@ mozJSComponentLoader::LoadModule(FileLocation& aFile)
+     RootedValue dummy(cx);
+     rv = ObjectForLocation(info, file, &entry->obj, &entry->thisObjectKey,
+                            &entry->location, false, &dummy);
++    PM_JCLLOG("ObjectForLocation rv=%x obj=%p", (unsigned)rv,
++              (void*)entry->obj.get());
+     if (NS_FAILED(rv)) {
+         return nullptr;
+     }
+@@ -737,6 +748,7 @@ mozJSComponentLoader::ObjectForLocation(ComponentLoaderInfo& aInfo,
+                .setFileAndLine(nativePath.get(), 1)
+                .setSourceIsLazy(!mReuseLoaderGlobal && !!cache);
+ 
++        PM_JCLLOG("compile %s realFile=%d", nativePath.get(), (int)realFile);
+         if (realFile) {
+ #ifdef HAVE_PR_MEMMAP
+             int64_t fileSize;
+@@ -873,6 +885,9 @@ mozJSComponentLoader::ObjectForLocation(ComponentLoaderInfo& aInfo,
+ 
+             /* read the file in one swoop */
+             rv = scriptStream->Read(buf.get(), len, &bytesRead);
++            PM_JCLLOG("channel read %s len=%u read=%u rv=%x",
++                      nativePath.get(), (unsigned)len, (unsigned)bytesRead,
++                      (unsigned)rv);
+             if (bytesRead != len)
+                 return NS_BASE_STREAM_OSERROR;
+ 
+@@ -901,6 +916,7 @@ mozJSComponentLoader::ObjectForLocation(ComponentLoaderInfo& aInfo,
+     }
+ 
+     if (!script && !function) {
++        PM_JCLLOG("compile FAILED %s", nativePath.get());
+         return NS_ERROR_FAILURE;
+     }
+ 
+@@ -958,6 +974,7 @@ mozJSComponentLoader::ObjectForLocation(ComponentLoaderInfo& aInfo,
+             ok = JS_CallFunction(aescx, obj, function,
+                                  JS::HandleValueArray::empty(), &rval);
+         }
++        PM_JCLLOG("exec %s ok=%d", nativePath.get(), (int)ok);
+ 
+         if (!ok) {
+             if (aPropagateExceptions && aes.HasException()) {
+diff --git a/media/libstagefright/system/core/liblog/logd_write.c b/media/libstagefright/system/core/liblog/logd_write.c
+index 7bdf61e876..6879756596 100644
+--- a/media/libstagefright/system/core/liblog/logd_write.c
++++ b/media/libstagefright/system/core/liblog/logd_write.c
+@@ -64,18 +64,83 @@ static int (*write_to_log)(log_id_t, struct iovec *vec, size_t nr) = __write_to_
+ static pthread_mutex_t log_init_lock = PTHREAD_MUTEX_INITIALIZER;
+ #endif
+ 
++#if defined(ANDROID) || defined(__ANDROID__)
++/*
++ * This bundled liblog predates logd: it writes to /dev/log/* which no longer
++ * exists, and its simulator fallback writes to stderr, which Android app
++ * processes have routed to /dev/null. On Android, forward everything to the
++ * real system liblog instead. dlopen/dlsym are used so the dependency stays
++ * optional; inside Gecko these resolve through the mozglue linker wrappers.
++ */
++#include <dlfcn.h>
++
++typedef int (*real_buf_write_fn)(int bufID, int prio, const char *tag,
++                                 const char *msg);
++typedef int (*real_bwrite_fn)(int32_t tag, const void *payload, size_t len);
++
++static real_buf_write_fn real_buf_write = NULL;
++static real_bwrite_fn real_bwrite = NULL;
++static int real_log_ready = 0;
++
++static void real_log_init(void)
++{
++    void *h;
++
++    if (real_log_ready) {
++        return;
++    }
++    real_log_ready = -1;
++
++    h = dlopen("liblog.so", RTLD_NOW | RTLD_LOCAL);
++    if (!h) {
++        return;
++    }
++    real_buf_write = (real_buf_write_fn) dlsym(h, "__android_log_buf_write");
++    real_bwrite = (real_bwrite_fn) dlsym(h, "__android_log_bwrite");
++    if (real_buf_write) {
++        real_log_ready = 1;
++    }
++}
++
++static int __write_to_log_real(log_id_t log_id, struct iovec *vec, size_t nr)
++{
++    if (log_id == LOG_ID_EVENTS) {
++        if (!real_bwrite || nr != 2) {
++            return -1;
++        }
++        return real_bwrite(*(const int32_t *) vec[0].iov_base,
++                           vec[1].iov_base, vec[1].iov_len);
++    }
++    if (nr != 3) {
++        return -1;
++    }
++    return real_buf_write((int) log_id,
++                          (int) *(const unsigned char *) vec[0].iov_base,
++                          (const char *) vec[1].iov_base,
++                          (const char *) vec[2].iov_base);
++}
++#endif /* ANDROID */
++
++#if !defined(ANDROID) && !defined(__ANDROID__)
+ static int log_fds[(int)LOG_ID_MAX] = { -1, -1, -1, -1 };
++#endif
+ 
+ /*
+  * This is used by the C++ code to decide if it should write logs through
+  * the C code.  Basically, if /dev/log/... is available, we're running in
+  * the simulator rather than a desktop tool and want to use the device.
+  */
++#if !defined(ANDROID) && !defined(__ANDROID__)
+ static enum {
+     kLogUninitialized, kLogNotAvailable, kLogAvailable
+ } g_log_status = kLogUninitialized;
++#endif
+ int __android_log_dev_available(void)
+ {
++#if defined(ANDROID) || defined(__ANDROID__)
++    real_log_init();
++    return (real_log_ready == 1);
++#else
+     if (g_log_status == kLogUninitialized) {
+         if (access("/dev/"LOGGER_LOG_MAIN, W_OK) == 0)
+             g_log_status = kLogAvailable;
+@@ -84,6 +149,7 @@ int __android_log_dev_available(void)
+     }
+ 
+     return (g_log_status == kLogAvailable);
++#endif
+ }
+ 
+ static int __write_to_log_null(log_id_t log_fd, struct iovec *vec, size_t nr)
+@@ -91,6 +157,7 @@ static int __write_to_log_null(log_id_t log_fd, struct iovec *vec, size_t nr)
+     return -1;
+ }
+ 
++#if !defined(ANDROID) && !defined(__ANDROID__)
+ static int __write_to_log_kernel(log_id_t log_id, struct iovec *vec, size_t nr)
+ {
+     ssize_t ret;
+@@ -108,6 +175,7 @@ static int __write_to_log_kernel(log_id_t log_id, struct iovec *vec, size_t nr)
+ 
+     return ret;
+ }
++#endif
+ 
+ static int __write_to_log_init(log_id_t log_id, struct iovec *vec, size_t nr)
+ {
+@@ -116,6 +184,11 @@ static int __write_to_log_init(log_id_t log_id, struct iovec *vec, size_t nr)
+ #endif
+ 
+     if (write_to_log == __write_to_log_init) {
++#if defined(ANDROID) || defined(__ANDROID__)
++        real_log_init();
++        write_to_log = (real_log_ready == 1) ? __write_to_log_real
++                                             : __write_to_log_null;
++#else
+         log_fds[LOG_ID_MAIN] = log_open("/dev/"LOGGER_LOG_MAIN, O_WRONLY);
+         log_fds[LOG_ID_RADIO] = log_open("/dev/"LOGGER_LOG_RADIO, O_WRONLY);
+         log_fds[LOG_ID_EVENTS] = log_open("/dev/"LOGGER_LOG_EVENTS, O_WRONLY);
+@@ -137,6 +210,7 @@ static int __write_to_log_init(log_id_t log_id, struct iovec *vec, size_t nr)
+         if (log_fds[LOG_ID_SYSTEM] < 0) {
+             log_fds[LOG_ID_SYSTEM] = log_fds[LOG_ID_MAIN];
+         }
++#endif
+     }
+ 
+ #ifdef HAVE_PTHREADS
 diff --git a/media/libtremor/lib/misc.h b/media/libtremor/lib/misc.h
 index 1ae4d2e813..2fc521a244 100644
 --- a/media/libtremor/lib/misc.h
@@ -1041,6 +1379,71 @@ index dcb432415f..101f9cae8b 100644
  endif
  
  ifdef USE_PTHREADS
+diff --git a/toolkit/components/commandlines/nsCommandLine.cpp b/toolkit/components/commandlines/nsCommandLine.cpp
+index d78cdd23a8..1dbf4a7e57 100644
+--- a/toolkit/components/commandlines/nsCommandLine.cpp
++++ b/toolkit/components/commandlines/nsCommandLine.cpp
+@@ -494,9 +494,17 @@ LogConsoleMessage(const char16_t* fmt, ...)
+   free(msg);
+ }
+ 
++#ifdef ANDROID
++#include <android/log.h>
++#define PM_CLHLOG(...) __android_log_print(ANDROID_LOG_INFO, "PMCLH", __VA_ARGS__)
++#else
++#define PM_CLHLOG(...)
++#endif
++
+ nsresult
+ nsCommandLine::EnumerateHandlers(EnumerateHandlersCallback aCallback, void *aClosure)
+ {
++  PM_CLHLOG("EnumerateHandlers");
+   nsresult rv;
+ 
+   nsCOMPtr<nsICategoryManager> catman
+@@ -523,7 +531,9 @@ nsCommandLine::EnumerateHandlers(EnumerateHandlersCallback aCallback, void *aClo
+     if (NS_FAILED(rv))
+       continue;
+ 
++    PM_CLHLOG("handler entry=%s contractID=%s", entry.get(), contractID.get());
+     nsCOMPtr<nsICommandLineHandler> clh(do_GetService(contractID.get()));
++    PM_CLHLOG("handler %s resolved=%d", contractID.get(), (int)(clh != nullptr));
+     if (!clh) {
+       LogConsoleMessage(u"Contract ID '%s' was registered as a command line handler for entry '%s', but could not be created.",
+                         contractID.get(), entry.get());
+@@ -531,6 +541,7 @@ nsCommandLine::EnumerateHandlers(EnumerateHandlersCallback aCallback, void *aClo
+     }
+ 
+     rv = (aCallback)(clh, this, aClosure);
++    PM_CLHLOG("handler %s ran rv=%x", contractID.get(), (unsigned)rv);
+     if (rv == NS_ERROR_ABORT)
+       break;
+ 
+@@ -598,6 +609,7 @@ EnumRun(nsICommandLineHandler* aHandler, nsICommandLine* aThis, void*)
+ NS_IMETHODIMP
+ nsCommandLine::Run()
+ {
++  PM_CLHLOG("Run");
+   nsresult rv;
+ 
+   rv = EnumerateValidators(EnumValidate, nullptr);
+diff --git a/toolkit/components/parentalcontrols/nsParentalControlsServiceDefault.cpp b/toolkit/components/parentalcontrols/nsParentalControlsServiceDefault.cpp
+index 5d97b6f1b8..b805d2b480 100644
+--- a/toolkit/components/parentalcontrols/nsParentalControlsServiceDefault.cpp
++++ b/toolkit/components/parentalcontrols/nsParentalControlsServiceDefault.cpp
+@@ -69,5 +69,12 @@ nsParentalControlsService::IsAllowed(int16_t aAction,
+                                      nsIURI *aUri,
+                                      bool *_retval)
+ {
++#ifdef ANDROID
++  /* There is no Android-side implementation feeding this service yet;
++   * with parental controls disabled everything is allowed. */
++  *_retval = true;
++  return NS_OK;
++#else
+   return NS_ERROR_NOT_AVAILABLE;
++#endif
+ }
 diff --git a/toolkit/library/moz.build b/toolkit/library/moz.build
 index e32a1258bb..fc48e98190 100644
 --- a/toolkit/library/moz.build
@@ -1075,6 +1478,37 @@ index e32a1258bb..fc48e98190 100644
      OS_LIBS += [
          'rt',
      ]
+diff --git a/toolkit/modules/Services.jsm b/toolkit/modules/Services.jsm
+index 2cb47be3a6..9c3afe718b 100644
+--- a/toolkit/modules/Services.jsm
++++ b/toolkit/modules/Services.jsm
+@@ -91,11 +91,26 @@ var initTable = [
+   ["netUtils", "@mozilla.org/network/util;1", "nsINetUtil"],
+   ["loadContextInfo", "@mozilla.org/load-context-info-factory;1", "nsILoadContextInfoFactory"],
+   ["qms", "@mozilla.org/dom/quota-manager-service;1", "nsIQuotaManagerService"],
++#ifdef MOZ_WIDGET_ANDROID
++  ["androidBridge", "@mozilla.org/android/bridge;1", "nsIAndroidBridge"],
++#endif
+ ];
+ 
+ initTable.forEach(([name, contract, intf]) => {
+   XPCOMUtils.defineLazyServiceGetter(Services, name, contract, intf);
+ });
+ 
++#ifdef MOZ_WIDGET_ANDROID
++/* No nsITelemetry component is built on Android; provide a no-op so that
++ * shared chrome code that records telemetry keeps working. */
++XPCOMUtils.defineLazyGetter(Services, "telemetry", function () {
++  let histogram = { add: function () {} };
++  return {
++    getHistogramById: function () { return histogram; },
++    getKeyedHistogramById: function () { return histogram; },
++  };
++});
++#endif
++
+ 
+ initTable = undefined;
 diff --git a/toolkit/moz.configure b/toolkit/moz.configure
 index 8dd507dcbb..dc86ef665f 100644
 --- a/toolkit/moz.configure
@@ -1147,10 +1581,162 @@ index b188eaea5b..9c2d86400b 100644
      UNIFIED_SOURCES += [
          'EventTracer.cpp',
 diff --git a/toolkit/xre/nsAppRunner.cpp b/toolkit/xre/nsAppRunner.cpp
-index 0ed2c3e6c8..6a6c412f01 100644
+index 0ed2c3e6c8..fc5c51f9bb 100644
 --- a/toolkit/xre/nsAppRunner.cpp
 +++ b/toolkit/xre/nsAppRunner.cpp
-@@ -4018,7 +4018,14 @@ XRE_InitCommandLine(int aArgc, char* aArgv[])
+@@ -3520,9 +3520,17 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
+  * XRE_mainRun - Command line startup, profile migration, and
+  * the calling of appStartup->Run().
+  */
++#ifdef ANDROID
++#include <android/log.h>
++#define PM_XRELOG(...) __android_log_print(ANDROID_LOG_INFO, "PMXRE", __VA_ARGS__)
++#else
++#define PM_XRELOG(...)
++#endif
++
+ nsresult
+ XREMain::XRE_mainRun()
+ {
++  PM_XRELOG("XRE_mainRun enter");
+   nsresult rv = NS_OK;
+   NS_ASSERTION(mScopedXPCOM, "Scoped xpcom not initialized.");
+ 
+@@ -3547,6 +3555,7 @@ XREMain::XRE_mainRun()
+ #endif
+ 
+   rv = mScopedXPCOM->SetWindowCreator(mNativeApp);
++  PM_XRELOG("SetWindowCreator rv=%x", (unsigned)rv);
+   NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
+ 
+   if (mStartOffline) {
+@@ -3559,9 +3568,12 @@ XREMain::XRE_mainRun()
+   {
+     nsCOMPtr<nsIObserver> startupNotifier
+       (do_CreateInstance(NS_APPSTARTUPNOTIFIER_CONTRACTID, &rv));
++    PM_XRELOG("appstartwn-notifier rv=%x", (unsigned)rv);
+     NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
+ 
++    PM_XRELOG("notifying app-startup");
+     startupNotifier->Observe(nullptr, APPSTARTUP_TOPIC, nullptr);
++    PM_XRELOG("app-startup notified");
+   }
+ 
+   nsCOMPtr<nsIAppStartup> appStartup
+@@ -3668,10 +3680,12 @@ XREMain::XRE_mainRun()
+   // As FilePreferences need the profile directory, we must initialize right here.
+   mozilla::FilePreferences::InitDirectoriesWhitelist();
+   mozilla::FilePreferences::InitPrefs();
++  PM_XRELOG("prefs init done");
+ 
+   OverrideDefaultLocaleIfNeeded();
+ 
+   appStartup->GetShuttingDown(&mShuttingDown);
++  PM_XRELOG("shuttingDown=%d", (int)mShuttingDown);
+ 
+   nsCOMPtr<nsICommandLineRunner> cmdLine;
+ 
+@@ -3685,6 +3699,7 @@ XREMain::XRE_mainRun()
+ 
+     rv = cmdLine->Init(gArgc, gArgv, workingDir,
+                        nsICommandLine::STATE_INITIAL_LAUNCH);
++    PM_XRELOG("cmdLine init rv=%x", (unsigned)rv);
+     NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
+ 
+     /* Special-case services that need early access to the command
+@@ -3692,7 +3707,9 @@ XREMain::XRE_mainRun()
+     nsCOMPtr<nsIObserverService> obsService =
+       mozilla::services::GetObserverService();
+     if (obsService) {
++      PM_XRELOG("command-line-startup notify");
+       obsService->NotifyObservers(cmdLine, "command-line-startup", nullptr);
++      PM_XRELOG("command-line-startup done");
+     }
+   }
+ 
+@@ -3721,7 +3738,9 @@ XREMain::XRE_mainRun()
+   SaveToEnv("XRE_BINARY_PATH=");
+ 
+   if (!mShuttingDown) {
++    PM_XRELOG("CreateHiddenWindow");
+     rv = appStartup->CreateHiddenWindow();
++    PM_XRELOG("CreateHiddenWindow rv=%x", (unsigned)rv);
+     NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
+ 
+ #if defined(HAVE_DESKTOP_STARTUP_ID) && defined(MOZ_WIDGET_GTK)
+@@ -3751,17 +3770,22 @@ XREMain::XRE_mainRun()
+       mozilla::services::GetObserverService();
+     if (obsService)
+       obsService->NotifyObservers(nullptr, "final-ui-startup", nullptr);
++    PM_XRELOG("final-ui-startup done");
+ 
+     (void)appStartup->DoneStartingUp();
++    PM_XRELOG("DoneStartingUp");
+ 
+     appStartup->GetShuttingDown(&mShuttingDown);
+   }
+ 
+   if (!mShuttingDown) {
++    PM_XRELOG("cmdLine->Run");
+     rv = cmdLine->Run();
++    PM_XRELOG("cmdLine->Run rv=%x", (unsigned)rv);
+     NS_ENSURE_SUCCESS_LOG(rv, NS_ERROR_FAILURE);
+ 
+     appStartup->GetShuttingDown(&mShuttingDown);
++    PM_XRELOG("shuttingDown2=%d", (int)mShuttingDown);
+   }
+ 
+   if (!mShuttingDown) {
+@@ -3789,7 +3813,9 @@ XREMain::XRE_mainRun()
+ #endif /* MOZ_INSTRUMENT_EVENT_LOOP */
+ 
+   {
++    PM_XRELOG("appStartup->Run");
+     rv = appStartup->Run();
++    PM_XRELOG("appStartup->Run rv=%x", (unsigned)rv);
+     if (NS_FAILED(rv)) {
+       NS_ERROR("failed to run appstartup");
+       gLogConsoleErrors = true;
+@@ -3826,6 +3852,7 @@ void XRE_GlibInit()
+ int
+ XREMain::XRE_main(int argc, char* argv[], const nsXREAppData* aAppData)
+ {
++  PM_XRELOG("XRE_main enter argc=%d", argc);
+   ScopedLogging log;
+ 
+   char aLocal;
+@@ -3873,12 +3900,16 @@ XREMain::XRE_main(int argc, char* argv[], const nsXREAppData* aAppData)
+ 
+   // init
+   bool exit = false;
++  PM_XRELOG("XRE_mainInit");
+   int result = XRE_mainInit(&exit);
++  PM_XRELOG("XRE_mainInit result=%d exit=%d", result, (int)exit);
+   if (result != 0 || exit)
+     return result;
+ 
+   // startup
++  PM_XRELOG("XRE_mainStartup");
+   result = XRE_mainStartup(&exit);
++  PM_XRELOG("XRE_mainStartup result=%d exit=%d", result, (int)exit);
+   if (result != 0 || exit)
+     return result;
+ 
+@@ -3889,10 +3920,13 @@ XREMain::XRE_main(int argc, char* argv[], const nsXREAppData* aAppData)
+   if (!mScopedXPCOM)
+     return 1;
+ 
++  PM_XRELOG("ScopedXPCOMStartup Initialize");
+   rv = mScopedXPCOM->Initialize();
++  PM_XRELOG("ScopedXPCOMStartup Initialize rv=%x", (unsigned)rv);
+   NS_ENSURE_SUCCESS(rv, 1);
+ 
+   // run!
++  PM_XRELOG("calling XRE_mainRun");
+   rv = XRE_mainRun();
+ 
+ #ifdef MOZ_INSTRUMENT_EVENT_LOOP
+@@ -4018,7 +4052,14 @@ XRE_InitCommandLine(int aArgc, char* aArgv[])
    delete[] canonArgs;
  #endif
  
@@ -1385,3 +1971,97 @@ index 901ae833e8..0ed4d54342 100644
  #define USE_LINUX_QUOTACTL
  #include <sys/mount.h>
  #include <sys/quota.h>
+diff --git a/xpfe/appshell/nsAppShellService.cpp b/xpfe/appshell/nsAppShellService.cpp
+index 569b743fa6..7817c3fc54 100644
+--- a/xpfe/appshell/nsAppShellService.cpp
++++ b/xpfe/appshell/nsAppShellService.cpp
+@@ -619,6 +619,13 @@ CheckForFullscreenWindow()
+ /*
+  * Just do the window-making part of CreateTopLevelWindow
+  */
++#ifdef ANDROID
++#include <android/log.h>
++#define PM_ASSLOG(...) __android_log_print(ANDROID_LOG_INFO, "PMASS", __VA_ARGS__)
++#else
++#define PM_ASSLOG(...)
++#endif
++
+ nsresult
+ nsAppShellService::JustCreateTopWindow(nsIXULWindow *aParent,
+                                        nsIURI *aUrl,
+@@ -630,6 +637,12 @@ nsAppShellService::JustCreateTopWindow(nsIXULWindow *aParent,
+                                        mozIDOMWindowProxy *aOpenerWindow,
+                                        nsWebShellWindow **aResult)
+ {
++  {
++    nsAutoCString pmspec;
++    if (aUrl) aUrl->GetSpec(pmspec);
++    PM_ASSLOG("JustCreateTopWindow url=%s mask=%x hidden=%d",
++              pmspec.get(), (unsigned)aChromeMask, (int)aIsHiddenWindow);
++  }
+   *aResult = nullptr;
+   NS_ENSURE_STATE(!mXPCOMWillShutDown);
+ 
+@@ -737,6 +750,7 @@ nsAppShellService::JustCreateTopWindow(nsIXULWindow *aParent,
+                                    aIsHiddenWindow, aOpeningTab,
+                                    aOpenerWindow, widgetInitData);
+ 
++  PM_ASSLOG("JustCreateTopWindow Initialize rv=%x", (unsigned)rv);
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
+   // Enforce the Private Browsing autoStart pref first.
+diff --git a/xpfe/appshell/nsWebShellWindow.cpp b/xpfe/appshell/nsWebShellWindow.cpp
+index 2893e78682..287c17cd60 100644
+--- a/xpfe/appshell/nsWebShellWindow.cpp
++++ b/xpfe/appshell/nsWebShellWindow.cpp
+@@ -28,6 +28,9 @@
+ #include "nsIDOMXULElement.h"
+ 
+ #include "nsWidgetInitData.h"
++#ifdef ANDROID
++#include <android/log.h>
++#endif
+ #include "nsWidgetsCID.h"
+ #include "nsIWidget.h"
+ #include "nsIWidgetListener.h"
+@@ -246,11 +249,19 @@ nsresult nsWebShellWindow::Initialize(nsIXULWindow* aParent,
+     NS_ConvertUTF8toUTF16 urlString(tmpStr);
+     nsCOMPtr<nsIWebNavigation> webNav(do_QueryInterface(mDocShell));
+     NS_ENSURE_TRUE(webNav, NS_ERROR_FAILURE);
++#ifdef ANDROID
++    __android_log_print(ANDROID_LOG_INFO, "PMWSW",
++                        "LoadURI %s", tmpStr.get());
++#endif
+     rv = webNav->LoadURI(urlString.get(),
+                          nsIWebNavigation::LOAD_FLAGS_NONE,
+                          nullptr,
+                          nullptr,
+                          nullptr);
++#ifdef ANDROID
++    __android_log_print(ANDROID_LOG_INFO, "PMWSW",
++                        "LoadURI rv=%x", (unsigned)rv);
++#endif
+     NS_ENSURE_SUCCESS(rv, rv);
+   }
+                      
+diff --git a/xpfe/appshell/nsXULWindow.cpp b/xpfe/appshell/nsXULWindow.cpp
+index 5b9f535e24..6045760266 100644
+--- a/xpfe/appshell/nsXULWindow.cpp
++++ b/xpfe/appshell/nsXULWindow.cpp
+@@ -1021,8 +1021,16 @@ NS_IMETHODIMP nsXULWindow::EnsureAuthPrompter()
+   return mAuthPrompter ? NS_OK : NS_ERROR_FAILURE;
+ }
+  
++#ifdef ANDROID
++#include <android/log.h>
++#define PM_XWLOG(...) __android_log_print(ANDROID_LOG_INFO, "PMXW", __VA_ARGS__)
++#else
++#define PM_XWLOG(...)
++#endif
++
+ void nsXULWindow::OnChromeLoaded()
+ {
++  PM_XWLOG("OnChromeLoaded %p", (void*)this);
+   nsresult rv = EnsureContentTreeOwner();
+ 
+   if (NS_SUCCEEDED(rv)) {

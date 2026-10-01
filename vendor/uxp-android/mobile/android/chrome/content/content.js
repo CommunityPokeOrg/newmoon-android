@@ -5,7 +5,11 @@
 
 var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
-Cu.import("resource://gre/modules/ExtensionContent.jsm");
+/* WebExtensions machinery is not part of this build; guard the import so
+ * the frame script's other message listeners still register. */
+try {
+  Cu.import("resource://gre/modules/ExtensionContent.jsm");
+} catch (e) {}
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
@@ -153,7 +157,9 @@ addMessageListener("RemoteLogins:fillForm", function(message) {
   LoginManagerContent.receiveMessage(message, content);
 });
 
-ExtensionContent.init(this);
-addEventListener("unload", () => {
-  ExtensionContent.uninit(this);
-});
+if (typeof ExtensionContent !== "undefined") {
+  ExtensionContent.init(this);
+  addEventListener("unload", () => {
+    ExtensionContent.uninit(this);
+  });
+}

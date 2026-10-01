@@ -187,17 +187,34 @@ ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
   parsed and its prototype cached) plus `xblcache/` entries for toolkit
   bindings — XUL parsing, the prototype cache, and the XBL binding
   engine all execute correctly.
-- **Content page loads do not yet complete.** Verified path: a VIEW
-  intent creates a real tab (Java `onTabChanged: ADDED/SELECTED`, URL
-  bar updates, throbber spins, NSS initializes). But the tab's
-  `<browser>` docshell never produces an HTTP transaction: 0 rows in
-  `browser.db` history/visits, empty `cache2/entries`, no sockets, and
-  the new GeckoConsole→logcat bridge is silent. Diagnosis so far: the
-  failure is between `BrowserApp.startup()`/tab-browser creation and
-  `InternalLoad` — `MOZ_LOG` output produces zero bytes even for
-  `all:5`, consistent with the load never starting rather than a
-  logging plumbing bug. Needs either deeper instrumentation or a real
-  arm64 device to separate a code bug from an emulator artifact.
+- **Real web page loads verified end-to-end (2026-10-01).** After
+  fixing the libxul logging blackout (see root causes), the earlier
+  "navigations never start" conclusion proved to be an observability
+  artifact, not a functional failure. Verified via `am start -a VIEW`:
+  - `http://neverssl.com` — full navigation lifecycle:
+    `START → TITLE → LOCATION_CHANGE → SECURITY_CHANGE → PAGE_SHOW →
+    STOP → FAVICON → THUMBNAIL`, including a followed HTTP redirect
+    chain (neverssl.com → fineolduniquesong.neverssl.com/online).
+  - `https://example.com` — same full cycle including
+    `SECURITY_CHANGE` (NSS/PSM path works; TLS handshake + cert
+    verification complete, ~48 s wall-clock under ndk_translation).
+  The first-ever HTTPS attempt appeared to stall at `START` for
+  several minutes — first-use NSS/certdb initialization under
+  translation is extremely slow; a subsequent run completed normally.
+- **All observed chrome JS errors resolved.** After `browser.xul`
+  loads, the GeckoConsole bridge showed a cascade of JS errors — every
+  one root-caused and fixed (see root causes): unpreprocessed
+  `browser.js`, missing `Services.androidBridge`/`Services.telemetry`
+  getters, `UITelemetry` module absent, parental-controls
+  `NOT_AVAILABLE`, missing tracking-protection prefs, stale
+  `storage-mozStorage.js` contract+manifest entries, unpackaged
+  `blocklist.manifest`, and unguarded imports of modules
+  (`ExtensionContent`, `PresentationDeviceInfoManager`,
+  `SimpleServiceDiscovery`) that UXP no longer ships. Remaining
+  console noise is cosmetic: `GMPInstallManager.jsm` lazy import
+  (`MOZ_GMP` unset), `ua-update.json` profile-path lookup, a dead
+  snippets.mozilla.net endpoint, and Cu.import failure lines logged
+  (but caught) by the guarded stubs.
 - Emulation caveat: everything above runs under ndk_translation
   (arm64→x86_64). `lldb-server`/gdbserver cannot run inside it, so
   native debugging is limited to logcat instrumentation.
@@ -220,17 +237,64 @@ ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
    allocated → `SIGSEGV@0` in `AddBoolVarCache` during
    `nsIOService::Init`. Fixed by renaming the manifest entry (in
    `vendor/uxp-android/mobile/android/installer/package-manifest.in`).
+3. **All libxul logging was dead** — the largest single debugging
+   root cause of this port. libxul exports its own
+   `__android_log_print`/`__android_log_write`/`__android_log_vprint`/
+   `__android_log_assert` (`T`, `@@xul6`-versioned) from the bundled
+   stagefright liblog (`media/libstagefright/system/core/liblog/
+   logd_write.c`, `FAKE_LOG_DEVICE=True` in moz.build). That stub
+   writes to `/dev/log/*` (removed since Android L) and falls back to
+   stderr — which is `/dev/null` in the app — so **every** libxul-side
+   `__android_log_print`, `MOZ_LOG`, and MOZ_ASSERT message was
+   silently discarded while Java-side logging looked fine. This is why
+   "nothing Gecko-side happened after runGecko" looked real.
+   `mozglue/linker/ElfLoader.cpp:30` explicitly warns about bundled
+   stub `__android_log_*` implementations. Fixed by dlopening the real
+   `liblog.so` inside the stub on `__ANDROID__` and forwarding
+   `__android_log_buf_write`/`__android_log_bwrite` (dlopen inside
+   libxul routes through `__wrap_dlopen` → `SystemElf` → real dlopen).
+   Verified: PM* instrumentation, `GeckoConsole`, `MOZ_LOG` module
+   output (e.g. `nsScreenManagerAndroid`) now all reach logcat.
+4. **`browser.js` shipped unpreprocessed** — vendored `jar.mn` lacked
+   the `*` marker, so literal `#ifdef MOZ_SAFE_BROWSING` lines shipped
+   in the chrome → SyntaxError → `BrowserApp` undefined → startup dead
+   after window creation. Fixed by marking `browser.js` preprocessed
+   in `mobile/android/chrome/jar.mn`.
+5. **Missing XPConnect glue / services that esr52-era chrome expects:**
+   `Services.androidBridge` (added to `Services.jsm` initTable under
+   `MOZ_WIDGET_ANDROID`; `nsAndroidBridge` factory was already
+   registered in `widget/android/nsWidgetFactory.cpp`), `Services.
+   telemetry` (no-op getter — no nsITelemetry exists in UXP, but
+   `SessionStore.js` calls `getHistogramById`), `UITelemetry.jsm`
+   (new module implementing `nsIUITelemetryObserver` — start/stop/
+   addEvent; the Java→native `widget::Telemetry` observer path routes
+   back into it), `nsIParentalControlsService::IsAllowed` returning
+   `NS_ERROR_NOT_AVAILABLE` on Android (aborted `BrowserApp.startup`
+   mid-way; now returns allowed under `ANDROID` — no Android
+   restriction provider exists), missing
+   `privacy.trackingprotection.{enabled,pbmode.enabled}` default prefs
+   (`getTrackingMode` threw; added to `mobile.js`), and packaging
+   drift: `storage-json.js`/`blocklist.manifest` absent from
+   `package-manifest.in` (login storage + addon-manager startup
+   failed), plus unguarded imports of modules UXP deleted
+   (`ExtensionContent` — killed the entire `content.js` frame script,
+   `PresentationDeviceInfoManager`, `SimpleServiceDiscovery` —
+   replaced with a lazy stub so casting code no-ops cleanly).
 
 ## Unverified / partial (honest caveats)
 
-- **No user interaction verified.** The app reaches steady state and
-  renders, but taps/typing are untested because the emulator's
-  `system_server` ANR dialogs block input dispatch (see above).
-  Actual web page loading from user input is unverified.
+- **No user interaction verified.** The app reaches steady state,
+  renders, and completes real HTTP/HTTPS navigations driven by VIEW
+  intents, but taps/typing are untested because the emulator's
+  `system_server` ANR dialogs (and the recurring "built for an older
+  version of Android" notice for targetSdk=23) block input dispatch.
+  Driving the UI interactively needs a real arm64 device or a KVM
+  host.
 - **Compositor depth is partially verified.** `nsWindow`,
-  `nsAppShell`, and the docshell/viewer path all execute (window
-  creation + `loadURI` succeed), but pixel-level compositing of XUL
-  chrome beyond the first-run/home screens is not yet confirmed.
+  `nsAppShell`, the docshell/viewer path, and full tab lifecycle
+  events (incl. THUMBNAIL captures of loaded pages) all execute;
+  screenshots confirm the chrome UI but loaded content pages have not
+  been screenshot-verified past the persistent system dialog overlay.
 - **Rebranded to unofficial "New Moon" identity** (2026-10-01):
   `MOZ_APP_BASENAME=NewMoon`, `MOZ_APP_VENDOR=Moonchild`,
   `ANDROID_PACKAGE_NAME=org.palemoon.community`, display name
@@ -279,8 +343,10 @@ ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
 ## Known missing pieces (next work)
 
 1. **Interactive verification on a real arm64 device** (or a faster
-   emulator host): drive URL loading, link navigation, and page
-   rendering past the home screen; watch for ndk_translation-specific
+   emulator host): page loads via intent are verified (HTTP + HTTPS
+   with full tab lifecycle); remaining is *interactive* use — typing
+   URLs, tapping links — blocked on this emulator by ANR dialogs and
+   the targetSdk=23 notice; watch for ndk_translation-specific
    behavior that won't reproduce on hardware.
 2. ~~Pale Moon branding/product pass~~ — done (unofficial "New Moon"
    branding + Pale Moon app GUID/UA); official "Pale Moon" branding
