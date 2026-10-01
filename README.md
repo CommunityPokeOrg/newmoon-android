@@ -1,49 +1,70 @@
-# Pale Moon for Android — port revival staging
+# New Moon — UXP (Pale Moon platform) browser for Android
 
-**Status: NOT a working browser.** This repository is the staging ground for
-reviving Pale Moon ("pm4a") on Android. It contains the recovered historical
-Android source, the archaeology of where it lived upstream, the first
-verified build-system slices of the port, and an honest assessment of the
-remaining work. See [`docs/STATUS.md`](docs/STATUS.md).
+New Moon is a community-built browser for Android on the **Unified XUL
+Platform (UXP)** — the Goanna engine forked from Firefox ESR-52-era
+Gecko that powers Pale Moon — with the historical Fennec (Firefox for
+Android) frontend recovered from the last UXP tree that shipped it.
 
-## What's here
+- **Engine:** Goanna/UXP (XUL, XBL, XPCOM, classic XUL-overlay extensions)
+- **Frontend:** Fennec-derived native Android UI (`mobile/android`)
+- **Package:** `org.palemoon.community` · arm64-v8a · minSdk 15 · targetSdk 24+
+- **Status:** builds, installs, launches; the XUL/XBL pipeline runs and real
+  HTTP/HTTPS page loads are verified. This is a retro/hobby-class browser on
+  an ESR-52-era engine — do not treat it as a secure daily driver.
 
-- [`vendor/uxp-android/`](vendor/README.md) — the complete historical
-  Android implementation recovered from UXP @ `63295d00` (Apr 2019, last
-  tree before the Fennec/Android removal, upstream Issue #1053):
-  `mobile/android` (the Pale-Moon-branded Fennec-derived app incl. early
-  GeckoView), `widget/android`, `mozglue/android`, `hal/android`,
-  `dom/system/android`, `gradle/`, `build/mobile`,
-  `build/annotationProcessors`, and the other `*/android` backend dirs.
-- [`patches/`](patches/) — port groundwork for current UXP master:
-  - `0001` — NSPR modern-NDK (r19+/clang unified toolchain) support.
-    **Verified:** cross-compiles to `aarch64-linux-android` .so libraries.
-  - `0002` — Android build-system plumbing: `*-linux-android*` target
-    triples, `cairo-android` toolkit choice, NDK configure includes, and
-    moz.build wiring for the restored dirs.
-- [`docs/ARCHAEOLOGY.md`](docs/ARCHAEOLOGY.md) — where the Android code
-  lived, the removal-commit timeline, and what survives upstream today.
-- [`docs/PORTING.md`](docs/PORTING.md) — architecture, gap analysis, and a
-  realistic scope ladder (L0 → L8).
-- [`scripts/`](scripts/) — pinned upstream fetch + patch/overlay + the
-  verified NSPR build.
+## Download
 
-## Truthful scope statement
+Signed APKs are published on the
+[Releases](https://github.com/CommunityPokeOrg/newmoon-android/releases)
+page. See [`docs/STATUS.md`](docs/STATUS.md) and
+[`docs/XUL-ON-ANDROID.md`](docs/XUL-ON-ANDROID.md) for exactly what is and
+isn't verified.
 
-- The historical Android browser existed and its full source is recovered —
-  it is MPL-2.0 upstream code, not a fork of a lost artifact.
-- That code is ~8 years of platform drift behind current UXP. Re-landing it
-  is a phased port, not a flip of a build flag.
-- **Verified working today:** Android target recognition + NSPR
-  cross-compile for aarch64 with a modern NDK.
-- **Not working / not yet attempted:** the C++ engine (libxul) for Android,
-  the widget/compositor layer, and the Java app itself. There is no APK and
-  nothing to install.
+## Building
 
-## Upstream references
+Reproducible end-to-end (also encoded in
+[`.github/workflows/build-apk.yml`](.github/workflows/build-apk.yml)):
 
-- UXP: https://repo.palemoon.org/MoonchildProductions/UXP
-- Pale-Moon: https://repo.palemoon.org/MoonchildProductions/Pale-Moon
+```sh
+# Prereqs: JDK 17, Android SDK 34 + build-tools 34.0.0/36.x,
+# Android NDK 27.2.12479018, m4, autoconf2.13
+export ANDROID_SDK_ROOT=~/Android/Sdk
+export ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/27.2.12479018
 
-This is a downstream-only effort; upstream removed Android support
-deliberately (Issue #1053).
+./scripts/fetch-android-deps.sh   # support/GMS AARs + ProGuard jar into SDK
+./scripts/fetch-upstream.sh       # pinned UXP + Pale-Moon sources (~2 GB)
+./scripts/apply-patches.sh        # port patches + overlay recovered sources
+./scripts/build-apk.sh            # mach configure && mach build && mach package
+./scripts/sign-apk.sh upstream/obj-android-aarch64/dist/newmoon-*.apk out.apk
+./scripts/verify-apk.sh out.apk   # ABI, ELF 16KB alignment, signature, SDK levels
+```
+
+`keystore/community.jks` is a **public community signing key** (store/key
+password `newmoon-community`). It exists so builds produce a consistent
+signature for update continuity — it is not a security credential and is
+intentionally committed.
+
+## Repository layout
+
+- [`vendor/uxp-android/`](vendor/README.md) — historical Android sources
+  recovered from UXP @ `63295d00` (Apr 2019, last tree before upstream's
+  Fennec/Android removal).
+- [`patches/`](patches/) — port patches applied on top of pinned UXP master:
+  NSPR modern-NDK, Android build plumbing, configure machinery, APK
+  packaging fixes.
+- [`mozconfig/mozconfig.android-aarch64`](mozconfig/mozconfig.android-aarch64) —
+  build configuration.
+- [`scripts/`](scripts/) — fetch/patch/build/sign/verify pipeline.
+- [`docs/`](docs/) — archaeology, porting plan, and honest status.
+
+## Licensing & attribution
+
+- UXP/Goanna and the recovered Android sources are **MPL-2.0** code
+  Copyright © Moonchild Productions / Mozilla contributors.
+- "New Moon" is an unofficial community branding used for continuity with
+  the community Android build lineage; this project is **not affiliated
+  with or endorsed by Moonchild Productions**.
+- Upstream removed Android support deliberately
+  ([UXP issue #1053](https://repo.palemoon.org/MoonchildProductions/UXP/issues/1053));
+  this is a downstream-only effort. Staging history lives at
+  [CommunityPokeOrg/pale-moon-android](https://github.com/CommunityPokeOrg/pale-moon-android).

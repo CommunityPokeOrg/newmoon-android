@@ -1,0 +1,72 @@
+name: Build New Moon APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['newmoon-*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    env:
+      ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME || '/usr/local/lib/android/sdk' }}
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_NDK: /usr/local/lib/android/sdk/ndk/27.2.12479018
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install system build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y m4 autoconf2.13 curl unzip zip
+
+      - name: Install Android SDK components
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses >/dev/null || true
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0" "build-tools;36.1.0" "ndk;27.2.12479018"
+
+      - name: Stage legacy support/GMS AARs + ProGuard
+        run: ./scripts/fetch-android-deps.sh
+
+      - name: Fetch pinned upstream UXP sources
+        run: ./scripts/fetch-upstream.sh
+
+      - name: Apply port patches + overlay Android sources
+        run: ./scripts/apply-patches.sh
+
+      - name: Configure, build, package
+        run: ./scripts/build-apk.sh
+
+      - name: 16KB-align and sign APK
+        run: |
+          APK=$(ls upstream/obj-android-aarch64/dist/*.apk | head -1)
+          ./scripts/sign-apk.sh "$APK" "newmoon-android-arm64.apk"
+
+      - name: Verify APK
+        run: ./scripts/verify-apk.sh newmoon-android-arm64.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: newmoon-android-arm64-apk
+          path: newmoon-android-arm64.apk
+
+      - name: Attach APK to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" newmoon-android-arm64.apk --clobber
