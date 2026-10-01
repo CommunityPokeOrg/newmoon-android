@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="org.palemoon.crashhelper"
+          android:versionCode="1"
+          android:versionName="1.0">
+
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="24"/>
+
+    <!-- Read reports the main app mirrors into shared storage on older
+         releases; on API 33+ access is via the SAF folder grant instead. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <!-- Harmless to request; only ever granted via `pm grant` over adb.
+         Enables the optional launch-logcat monitor. -->
+    <uses-permission android:name="android.permission.READ_LOGS"/>
+
+    <application android:label="New Moon Crash Helper"
+                 android:icon="@mipmap/ic_launcher"
+                 android:theme="@android:style/Theme.Material.Light"
+                 android:allowBackup="false">
+        <activity android:name=".MainActivity"
+                  android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <activity android:name=".ReportViewActivity"
+                  android:exported="false"/>
+    </application>
+</manifest>

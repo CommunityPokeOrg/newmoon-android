@@ -58,15 +58,21 @@ jobs:
       - name: Verify APK
         run: ./scripts/verify-apk.sh newmoon-android-arm64.apk
 
-      - name: Upload APK artifact
+      - name: Build Crash Helper APK
+        run: ./scripts/build-helper.sh newmoon-crash-helper.apk
+
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: newmoon-android-arm64-apk
-          path: newmoon-android-arm64.apk
+          name: newmoon-apks
+          path: |
+            newmoon-android-arm64.apk
+            newmoon-crash-helper.apk
 
-      - name: Attach APK to release
+      - name: Attach APKs to release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${GITHUB_REF_NAME}" newmoon-android-arm64.apk --clobber
+          gh release upload "${GITHUB_REF_NAME}" newmoon-crash-helper.apk --clobber

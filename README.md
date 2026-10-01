@@ -20,6 +20,25 @@ page. See [`docs/STATUS.md`](docs/STATUS.md) and
 [`docs/XUL-ON-ANDROID.md`](docs/XUL-ON-ANDROID.md) for exactly what is and
 isn't verified.
 
+### Crash diagnostics
+
+Two apps ship on the release:
+
+- **`newmoon-android-arm64.apk`** — the browser. It writes crash reports
+  (`crash-`, `startup-`, `watch-`, `exit-*.txt`) and a live
+  `newmoon-session-started.txt` marker into `Download/NewMoon/` —
+  including reports produced by a `:reporter` watchdog process that
+  survives a main-process native crash.
+- **`newmoon-crash-helper.apk`** (`org.palemoon.crashhelper`) — a
+  standalone companion that reads that shared folder via a one-tap folder
+  grant (SAF), shows an "unclean exit" banner when the session marker is
+  stale, lists reports with Copy/Share, can launch New Moon, and offers a
+  launch-time logcat monitor after
+  `adb shell pm grant org.palemoon.crashhelper android.permission.READ_LOGS`
+  (no API lets a normal app read another app's logs or ApplicationExitInfo —
+  this is the honest limit; a death before the app's own code runs can only
+  be seen via the stale marker or adb logcat).
+
 ## Building
 
 Reproducible end-to-end (also encoded in
@@ -54,7 +73,10 @@ intentionally committed.
   packaging fixes.
 - [`mozconfig/mozconfig.android-aarch64`](mozconfig/mozconfig.android-aarch64) —
   build configuration.
-- [`scripts/`](scripts/) — fetch/patch/build/sign/verify pipeline.
+- [`scripts/`](scripts/) — fetch/patch/build/sign/verify pipeline;
+  `build-helper.sh` builds the standalone Crash Helper APK.
+- [`helper/`](helper/) — standalone Crash Helper app sources
+  (`org.palemoon.crashhelper`).
 - [`docs/`](docs/) — archaeology, porting plan, and honest status.
 
 ## Licensing & attribution

@@ -4,3 +4,4 @@ out/
 *.so
 *.a
 obj-*/
+build/

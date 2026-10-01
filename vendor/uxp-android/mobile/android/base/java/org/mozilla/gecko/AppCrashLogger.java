@@ -127,8 +127,13 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
                 previousRunIncomplete ? readSmallFile(marker) : null;
 
             // Mark the start of this session. Cleared by markUiReady().
-            writeSmallFile(marker, "started " + nowIso()
-                                   + " uptimeMs=" + SystemClock.uptimeMillis());
+            String markerText = "started " + nowIso()
+                                + " uptimeMs=" + SystemClock.uptimeMillis();
+            writeSmallFile(marker, markerText);
+            // Shared copy the standalone Crash Helper app can see: a stale
+            // newmoon-session-started file means the last run died before
+            // the UI came up even if no report was written.
+            writeSharedMarker(appContext, markerText);
 
             if (previousRunIncomplete) {
                 writeStartupFailureReport(appContext, previousMarkerContent);
@@ -319,6 +324,7 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
                 try {
                     new File(getReportDir(appContext),
                              MARKER_FILE).delete();
+                    deleteSharedMarker(appContext);
                 } catch (Throwable t) {
                     // Never propagate.
                 }
@@ -725,6 +731,74 @@ public final class AppCrashLogger implements Thread.UncaughtExceptionHandler {
             }
         } catch (Throwable t) {
             // External storage absent or unwritable; internal copy stands.
+        }
+    }
+
+    private static final String SHARED_MARKER_NAME = "newmoon-session-started.txt";
+
+    private static void writeSharedMarker(Context context, String text) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                ContentResolver cr = context.getContentResolver();
+                deleteDownloadsRow(cr, SHARED_MARKER_NAME);
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.Downloads.DISPLAY_NAME, SHARED_MARKER_NAME);
+                values.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
+                values.put(MediaStore.Downloads.RELATIVE_PATH,
+                           Environment.DIRECTORY_DOWNLOADS + "/" + DOWNLOADS_SUBDIR);
+                Uri uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (uri != null) {
+                    OutputStream out = null;
+                    try {
+                        out = cr.openOutputStream(uri);
+                        out.write(text.getBytes("UTF-8"));
+                    } finally {
+                        if (out != null) {
+                            try { out.close(); } catch (Throwable t) { }
+                        }
+                    }
+                }
+                return;
+            } catch (Throwable t) {
+                // Fall through to the legacy path.
+            }
+        }
+        // API <29 or MediaStore failure: plain file in public Downloads
+        // (Fennec declares WRITE_EXTERNAL_STORAGE).
+        try {
+            File dir = new File(
+                Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS), DOWNLOADS_SUBDIR);
+            dir.mkdirs();
+            writeSmallFile(new File(dir, SHARED_MARKER_NAME), text);
+        } catch (Throwable t) {
+            // External storage absent; internal marker still stands.
+        }
+    }
+
+    private static void deleteSharedMarker(Context context) {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                deleteDownloadsRow(context.getContentResolver(),
+                                   SHARED_MARKER_NAME);
+            }
+            File legacy = new File(
+                Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS),
+                DOWNLOADS_SUBDIR + "/" + SHARED_MARKER_NAME);
+            legacy.delete();
+        } catch (Throwable t) {
+            // Best effort.
+        }
+    }
+
+    private static void deleteDownloadsRow(ContentResolver cr, String name) {
+        try {
+            cr.delete(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                      MediaStore.Downloads.DISPLAY_NAME + "=?",
+                      new String[] { name });
+        } catch (Throwable t) {
+            // Best effort.
         }
     }
 
