@@ -250,7 +250,8 @@ var Addons = {
 
     let item = this._createItem(aAddon);
     item.setAttribute("isDisabled", !aAddon.isActive);
-    item.setAttribute("isUnsigned", aAddon.signedState <= AddonManager.SIGNEDSTATE_MISSING);
+    item.setAttribute("isUnsigned", aAddon.signedState != null &&
+                      aAddon.signedState <= AddonManager.SIGNEDSTATE_MISSING);
     item.setAttribute("opType", opType);
     item.setAttribute("updateable", updateable);
     if (blocked)

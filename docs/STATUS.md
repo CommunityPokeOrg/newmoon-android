@@ -295,6 +295,13 @@ ndk_translation). No /dev/kvm → TCG software CPU, cold boot ~8 min.
   events (incl. THUMBNAIL captures of loaded pages) all execute;
   screenshots confirm the chrome UI but loaded content pages have not
   been screenshot-verified past the persistent system dialog overlay.
+- **Tab content does not present on emulator (2026-10-02).** The
+  compositor produces real frames — tabs-tray thumbnails show rendered
+  pages — but the live `LayerView` SurfaceView stays white for every
+  tab (`about:addons`, `about:config`, `example.com` alike). This is
+  the presentation-layer failure behind the reported blank
+  `about:addons`; see `docs/ABOUT-ADDONS-BLANK.md` for the full
+  evidence chain and the chrome.manifest instrumentation recipe.
 - **Rebranded to unofficial "New Moon" identity** (2026-10-01):
   `MOZ_APP_BASENAME=NewMoon`, `MOZ_APP_VENDOR=Moonchild`,
   `ANDROID_PACKAGE_NAME=org.palemoon.community`, display name
